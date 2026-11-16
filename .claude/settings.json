@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__claude_ai_Base44",
+      "mcp__claude_ai_Canva",
+      "mcp__claude_ai_Figma",
+      "mcp__claude_ai_Lovable",
+      "mcp__claude_ai_Claude_Docs",
+      "mcp__claude_ai_Paybox",
+      "AskUserQuestion",
+      "mcp__jam__AskUserQuestion"
+    ]
+  }
+}
