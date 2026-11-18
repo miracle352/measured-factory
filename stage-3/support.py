@@ -19,6 +19,7 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 
 FIELDS = ("legal_name", "hq_city", "ceo", "founded_year", "headcount_range", "funding_total")
+EXEC_TITLES = ("cfo", "coo", "cto")
 
 # --------------------------------------------------------------------------- tables
 
@@ -31,6 +32,9 @@ STATEMENT_PHRASES = {
     "founded_year": ["founded", "founding", "established", "incorporated"],
     "headcount_range": ["employs", "employees", "staff", "people", "headcount", "workforce"],
     "funding_total": ["raised", "funding", "invested", "investment"],
+    "cfo": ["chief financial officer", "CFO"],
+    "coo": ["chief operating officer", "COO"],
+    "cto": ["chief technology officer", "CTO"],
 }
 
 NEGATING_PHRASES = ["in talks to", "plans to", "planning to", "wants to", "expects to", "hopes to", "aims to",
@@ -327,9 +331,9 @@ def _x_hq_city(text: str, domain: str) -> list:
     return out
 
 
-def _x_ceo(text: str, domain: str) -> list:
+def _x_person(text: str, domain: str, field: str = "ceo") -> list:
     spans = [(m.start(), m.end()) for m in _name_regex(domain).finditer(text)]
-    spans += [(m.start(), m.end()) for m in _PHRASE_RE["ceo"].finditer(text)]
+    spans += [(m.start(), m.end()) for m in _PHRASE_RE[field].finditer(text)]
     spans.sort()
     merged: list[list[int]] = []
     for s, e in spans:
@@ -402,10 +406,13 @@ def _x_legal_name(text: str, domain: str) -> list:
 _EXTRACTORS = {
     "legal_name": _x_legal_name,
     "hq_city": _x_hq_city,
-    "ceo": _x_ceo,
+    "ceo": lambda t, d: _x_person(t, d, "ceo"),
     "founded_year": _x_founded,
     "headcount_range": _x_headcount,
     "funding_total": _x_funding,
+    "cfo": lambda t, d: _x_person(t, d, "cfo"),
+    "coo": lambda t, d: _x_person(t, d, "coo"),
+    "cto": lambda t, d: _x_person(t, d, "cto"),
 }
 
 
