@@ -88,7 +88,7 @@ def main():
                 if args.weather:
                     admin(args.mock, args.token, "weather", {"on": True})
                 t0 = time.time()
-                res = build.run_build(dom, "2026-03-01T09:00:00+00:00", lambda: False, build.Options(**kw))
+                res = build.run_build(dom, "2026-03-01T09:00:00+00:00", lambda: False, options=build.Options(**kw))
                 dt = time.time() - t0
                 calls = admin(args.mock, args.token, "log", get=True)["calls"]
                 log_cost = sum(c["cost"] for c in calls)

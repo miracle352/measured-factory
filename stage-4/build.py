@@ -64,6 +64,7 @@ class BuildResult:
     spent_units: int
     log: list = dc_field(default_factory=list)   # (kind, detail, cost) per provider call, for measurement
     pages: list = dc_field(default_factory=list)  # [{"url", "true_from"}] for every URL whose page text was read
+    all_failed: bool = False                     # every provider call that was made failed (a failed build)
 
 
 # --------------------------------------------------------------------------- router
@@ -126,13 +127,18 @@ class Gathered:
         self.evidence: list[Evidence] = []
         self._seen: set[tuple] = set()
         self.pages: dict[str, str | None] = {}    # url -> true_from, for every page read
+        self.meta: dict[str, dict] = {}           # url -> {"lineage", "lookalike"}
 
     def add_text(self, url: str, text: str, provider: str) -> None:
         if not url or not isinstance(text, str):
             return
         header, prose = support.split_header(text)
         info = _header_info(header)
+        lin = cand_mod.lineage(info, url)
         kind = cand_mod.page_kind(info.get("kind"), url, self.domain)
+        if kind == "own" and lin["registrant"] != self.domain:
+            kind = "aggregator"                   # only the company's registrant publishes an own page
+        lookalike = info.get("kind", "").strip() == "own" and lin["registrant"] != lin["own_host"]
         published = cand_mod.parse_published(info.get("published"))
         true_from = cand_mod.page_true_from(info.get("effective"), published)
         with self.lock:
@@ -141,6 +147,7 @@ class Gathered:
             self.full[url] = text
             self.provider[url] = provider
             self.pages[url] = true_from
+            self.meta[url] = {"lineage": lin, "lookalike": lookalike}
         if not text:
             return
         for sent in support.sentences(prose):
@@ -151,8 +158,17 @@ class Gathered:
         sent = support.collapse_ws(sent)
         if not sent or len(sent) > 500:
             return
-        for f in FIELDS + EXEC_TITLES:
+        for f in FIELDS + EXEC_TITLES + ("investors",):
             vals = support.extract_values(f, sent, self.domain)
+            if f == "investors":
+                for v in vals:
+                    key = (f, url, sent, provider, v)
+                    with self.lock:
+                        if key in self._seen:
+                            continue
+                        self._seen.add(key)
+                        self.evidence.append(Evidence(f, v, url, sent, provider, kind, published, true_from))
+                continue
             if len(vals) == 1:
                 key = (f, url, sent, provider)
                 with self.lock:
@@ -161,10 +177,50 @@ class Gathered:
                     self._seen.add(key)
                     self.evidence.append(Evidence(f, vals[0], url, sent, provider, kind, published, true_from))
 
+    def origin_of(self, url: str) -> str:
+        """Origin of a page (stage 4): First-Published-By, else the origin of its original, else the company's
+        domain for a lookalike, else its registrant.  Rule 2 follows at most three Canonical URLs."""
+        cur, hops = url, 0
+        while True:
+            m = self.meta.get(cur)
+            if m is None:
+                return cand_mod.normalise_host(cur)
+            lin = m["lineage"]
+            if lin["first_published_by"]:
+                return lin["first_published_by"]
+            canon = lin["canonical"]
+            if canon is None:
+                return self.domain if m["lookalike"] else lin["registrant"]
+            if hops >= 3 or canon not in self.meta:
+                return cand_mod.normalise_host(canon)
+            cur, hops = canon, hops + 1
+
+    def missing_originals(self) -> list[str]:
+        """Canonical URLs whose pages rule 2 needs and that were not gathered."""
+        need: list[str] = []
+        with self.lock:
+            metas = dict(self.meta)
+        for url in metas:
+            cur, hops = url, 0
+            while True:
+                m = metas.get(cur)
+                if m is None:
+                    break
+                lin = m["lineage"]
+                if lin["first_published_by"] or lin["canonical"] is None or hops >= 3:
+                    break
+                c = lin["canonical"]
+                if c not in metas:
+                    need.append(c)
+                    break
+                cur, hops = c, hops + 1
+        return list(dict.fromkeys(need))
+
     def decide(self, now_iso: str | None) -> dict:
         """Assemble every field from its candidates (candidates.assemble_field)."""
         out = {}
-        for f in FIELDS + ("executives",):
+        origins: dict[str, str] = {}
+        for f in FIELDS + ("executives", "investors"):
             with self.lock:
                 cands = []
                 for e in self.evidence:
@@ -173,9 +229,11 @@ class Gathered:
                             continue
                     elif e.field != f:
                         continue
+                    if e.url not in origins:
+                        origins[e.url] = self.origin_of(e.url)
                     c = {"value": e.value, "url": e.url, "excerpt": e.excerpt, "provider": e.provider,
                          "kind": e.kind, "published_at": e.published_at, "retrieved_at": now_iso,
-                         "true_from": e.true_from}
+                         "true_from": e.true_from, "origin": origins[e.url]}
                     if f == "executives":
                         c["title"] = e.field
                     cands.append(c)
@@ -246,7 +304,11 @@ def _is_refusal(exc: BaseException) -> bool:
 
 
 class _Build:
-    def __init__(self, domain: str, should_abort: Callable[[], bool], options: Options, now_iso: str | None = None):
+    def __init__(self, domain: str, should_abort: Callable[[], bool], options: Options, now_iso: str | None = None,
+                 budget=None):
+        self.budget = budget
+        self.budget_refused = False
+        self.attempted = 0
         self.domain = domain
         self.now_iso = now_iso
         self.name = support.company_name(domain)
@@ -306,13 +368,27 @@ class _Build:
         with self.lock:
             if self.spent + self.reserved + cost > MAX_UNITS:
                 return False
+            if self.budget is not None:
+                try:
+                    ok = bool(self.budget.reserve(cost))
+                except Exception:  # noqa: BLE001
+                    ok = False
+                if not ok:
+                    self.budget_refused = True
+                    return False
             self.reserved += cost
+            self.attempted += 1
             return True
 
     def _settle(self, reserved: int, charged: int) -> None:
         with self.lock:
             self.reserved -= reserved
             self.spent += charged
+            if self.budget is not None:
+                try:
+                    self.budget.settle(reserved, charged)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _note_latency(self, began: float) -> None:
         if time.monotonic() - began > 1.0:
@@ -468,16 +544,27 @@ class _Build:
                 urls = self.domain_search() or []
                 if self.opt.extract_results:
                     self._extract_all(pool, urls)
+            self._fetch_originals(pool)
             if self.opt.followups and self.successes > 0:
                 self._followups(pool)
+                self._fetch_originals(pool)
         except Exception:  # noqa: BLE001
             pass
         finally:
             pool.shutdown(wait=True)
         spent = self.spent
-        if self.successes == 0 or self.should_abort():
-            return BuildResult("failed", None, spent, self.log)
+        aborted = self.should_abort()
+        if aborted or (self.successes == 0 and not self.budget_refused):
+            return BuildResult("failed", None, spent, self.log, [], self.successes == 0 and self.attempted > 0)
         return BuildResult("ready", self.g.decide(self.now_iso), spent, self.log, self.g.page_list())
+
+    def _fetch_originals(self, pool) -> None:
+        """Obtain from a provider every original that origin rule 2 needs (at most three Canonical hops)."""
+        while not self._stopped():
+            need = [u for u in self.g.missing_originals() if u not in self.fetched]
+            if not need:
+                return
+            list(pool.map(self.extract, need[:10]))
 
     def _extract_all(self, pool, urls: list[str], limit: int = 10) -> int:
         new = [u for u in dict.fromkeys(urls) if u not in self.g.full and u not in self.fetched][:limit]
@@ -512,10 +599,10 @@ class _Build:
 
 
 def run_build(domain: str, now_iso: str | None = None, should_abort: Callable[[], bool] | None = None,
-              options: Options | None = None) -> BuildResult:
+              budget=None, options: Options | None = None) -> BuildResult:
     b = None
     try:
-        b = _Build(domain, should_abort or (lambda: False), options or Options(), now_iso)
+        b = _Build(domain, should_abort or (lambda: False), options or Options(), now_iso, budget)
         return b.run()
     except Exception:  # noqa: BLE001 - never raises
         spent = b.spent if b is not None else 0
