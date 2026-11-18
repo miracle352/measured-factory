@@ -31,3 +31,11 @@
 - Rows added by examiner: 11 (R-60..R-70).
 - Stage 2 closing: review rounds 2 (interim at feb3484 found 1 product-code failure: contested item missing field identifier; final at 73a7655); examiner rows added 11; failures caught in product code 1 (plus 1 low-risk note: Kind case, resolved by ruling); outside-call cost: mock only, max 72 units/build (limit 80); examiner probes 44 passed, 1 skipped (p08 browser-only page, no such page in the mock corpus); isolated check r-s2-x1: stage 1 122 passed, stage 2 12 passed, "claimed stage: 2". Uncovered: browser-only page text, kernel/browserbase sessions (unused), live providers, R-25 numbers not audited.
 - Time: dispatch and accept timestamps are in room-log; review rounds 2.
+
+## Stage 3
+- Rows added by examiner: 3 (R-71..R-73, from exam list E-33/E-39/E-46); ledger total 73.
+- Review rounds: 2 interim (aaf8ddb host runs ex-s3-1..4; ex-s3-1 failure was an examiner probe bug, fixed in 6149490) + final at bb84cdd (isolated). Failures caught in product code: 0; one builder-b fix found by its own restart/import testing (bb84cdd, R-58/R-59 learned_at of imported builds).
+- Deviations: builder-b's store.py commit 87f1b54 carries W-6a, W-6b, W-7/W-8/W-9/W-10/W-11 store code (about 30 rows) in one commit; server.py (7283c9f) and Dockerfile/RUN.md (aaf8ddb) separate. Not split (single file).
+- Outside-call cost: no cost defined for stage 3; build path unchanged from stage 2 (mock, max 72 units/build, limit 80); no new measurement run.
+- Final: examiner accepted bb84cdd78beb38b9035485ccfe10bff5e1054b97. Isolated check final-iso: stage 1 122, stage 2 12, stage 3 9 passed; examiner probes 66/66 isolated (53 API, 4 UI, 9 supplied). Uncovered: stage-2 export builds-list schema is a guess (our stage-2 exports carry none); live contested/unknown executives states and loading/error states only via mocked screenshots; concurrency stress only builder-b's 3-dossier run and examiner's two-refresh probe.
+- Time: dispatch and accept timestamps are in the room log; interim rounds 2 plus final 1.
