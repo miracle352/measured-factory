@@ -160,6 +160,27 @@ function renderExecutives(fo){
   });
   return h+'</div></section>';
 }
+function renderInvestors(fo){
+  fo=fo||{status:"unknown",value:null,citations:[],candidates:[]};
+  var st=fo.status||"unknown",names=Array.isArray(fo.value)?fo.value:[];
+  var h='<section class="card field investors '+DX.esc(st)+'"><div class="field-main"><div class="label">Investors</div>';
+  if(names.length){
+    h+='<ul class="exec-list">';
+    names.forEach(function(n){h+='<li><span class="exec-name">'+DX.esc(n)+'</span></li>';});
+    h+='</ul>';
+    if(fo.true_from)h+='<p class="small muted" style="margin:0 0 6px">In effect since '+DX.esc(DX.fmtDay(fo.true_from))+'</p>';
+  }else h+='<div class="field-none">No investors found yet</div>';
+  h+='<div class="row">'+DX.badge(st==="known"?"known":"unknown",st==="known"?"Known":"Unknown");
+  var no=(fo.origins||[]).length;
+  if(st==="known")h+=' <span class="small muted">'+(fo.corroborated?'Confirmed by independent sources':'Not yet confirmed by two independent sources')+(no?' ('+no+(no===1?' source':' sources')+')':'')+'</span>';
+  h+='</div></div><div class="cites">';
+  var cs=fo.citations||[];
+  if(!cs.length)h+='<p class="muted small" style="margin:0">No sources for the investors yet.</p>';
+  cs.forEach(function(c){
+    h+='<figure class="cite"><blockquote>'+DX.esc(c.excerpt)+'</blockquote><figcaption><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a> · via '+DX.esc(DX.providerLabel(c.provider))+'</figcaption></figure>';
+  });
+  return h+'</div></section>';
+}
 function renderDossier(b){
   dstate.innerHTML='<span class="badge b-'+DX.esc(b.state)+'" data-testid="dossier-state">'+DX.esc(b.state)+'</span>';
   var u=b.spent_units;
@@ -172,6 +193,7 @@ function renderDossier(b){
   if(b.state==="failed")h+='<div class="msg error" data-testid="dossier-failed">The last research run failed'+(b.researched_at?'; showing the most recent successful results.':'. Try refreshing.')+'</div>';
   DX.FIELDS.forEach(function(f){h+=renderField(f,(b.fields||{})[f]||{status:"unknown",value:null,citations:[],candidates:[]});});
   h+=renderExecutives((b.fields||{}).executives);
+  h+=renderInvestors((b.fields||{}).investors);
   view.innerHTML=h;shown=true;
 }
 function setPoll(on){
