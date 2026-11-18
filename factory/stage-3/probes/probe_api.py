@@ -962,3 +962,25 @@ def test_p70_restart_keeps_everything(world, web, clock, build, refresh, corpus,
     assert feed(c2) == fd and hist(c2, d) == h2
     c2.close()
     c.close()
+
+
+def test_p14b_equal_instants_in_different_offsets(world, web, clock, build, refresh, corpus):
+    """as_of: ready builds at equivalent instants written with different offsets -> the last
+    in build order, whichever offset as_of is written in."""
+    m = movers(corpus)
+    if not m:
+        pytest.skip("no mover")
+    d = m[0]
+    b0 = build(d)
+    at(clock, "2026-03-01T11:00:00+02:00")  # same instant as T0, other offset
+    web.epoch(1)
+    b1 = refresh(d)
+    assert fx.instant(b1["researched_at"]) == fx.instant(T0)
+    assert b1["fields"] != b0["fields"]
+    for as_of in (T0, "2026-03-01T11:00:00+02:00", "2026-02-28T22:00:00-11:00",
+                  "2026-03-01T09:00:00Z"):
+        r = assert_status(get(world.alice, d, as_of=as_of), 200).json()
+        assert r["fields"] == b1["fields"], as_of
+        assert r["state"] == "ready"
+    assert get(world.alice, d, as_of="2026-03-01T08:59:59+00:00").status_code == 404
+    assert len(feed(world.alice)) >= 1
