@@ -7,3 +7,6 @@
 - Failed build: build returns fields=None; store keeps old fields, adds spent_units, researched_at unchanged.
 - Strategy: nimble lite domain search + nimble research (all six fields) + extracts + at most 6 follow-up searches; tavily never called.
 - Multiple supported values: highest source trust, then latest date, then most pages; cite at most 3 excerpts for that value.
+
+## Stage 2
+- Stage-1 export holds only citations (no served text): imported candidates = one per stage-1 citation whose excerpt supports the field's value (kind/published_at null, provider = citation provider, retrieved_at = researched_at). Candidates with kind null rank as aggregator.
