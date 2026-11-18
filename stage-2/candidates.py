@@ -42,7 +42,7 @@ def normalise_host(url: str) -> str:
 
 
 def page_kind(headers_kind: str | None, url: str, company_domain: str) -> str:
-    k = (headers_kind or "").strip().lower()
+    k = (headers_kind or "").strip()  # exact match, case-sensitive (ruling): "News" takes the default rule
     if k in KINDS:
         return k
     return "own" if normalise_host(url) == (company_domain or "").strip().lower() else "aggregator"
