@@ -107,6 +107,7 @@ JS_LIB = r"""
 var DX=(function(){
   var FIELDS=%FIELDS%;
   var LABELS={legal_name:"Legal name",hq_city:"Headquarters city",ceo:"Chief executive",founded_year:"Year founded",headcount_range:"Headcount",funding_total:"Total funding"};
+  var TITLES={cfo:"Chief financial officer",coo:"Chief operating officer",cto:"Chief technology officer"};
   var PROV={nimble:"Nimble",tavily:"Tavily",kernel:"Kernel browser",browserbase:"Browserbase"};
   var KIND={own:"Company site",filing:"Filing registry",news:"News report",aggregator:"Data aggregator"};
   var STATUS={known:"Known",unknown:"Unknown",contested:"Contested"};
@@ -174,7 +175,7 @@ var DX=(function(){
   }
   renderUser();
   return {FIELDS:FIELDS,LABELS:LABELS,PROV:PROV,KIND:KIND,STATUS:STATUS,STATE:STATE,esc:esc,tok:tok,userName:userName,setSession:setSession,clearSession:clearSession,uuid:uuid,api:api,errMsg:errMsg,fmtTime:fmtTime,fmtMoney:fmtMoney,fmtValue:fmtValue,dataValue:dataValue,host:host,badge:badge,reader:reader,gate:gate,renderUser:renderUser,
-    fieldLabel:function(f){return LABELS[f]||f;},providerLabel:function(p){return PROV[p]||p||"Unknown source";},kindLabel:function(k){return k?(KIND[k]||k):"Imported (unclassified)";},statusLabel:function(s){return STATUS[s]||s;},stateLabel:function(s){return STATE[s]||s;}};
+    fieldLabel:function(f){return f==="executives"?"Executives":(LABELS[f]||f);},titleLabel:function(t){return TITLES[t]||String(t).toUpperCase();},fmtDay:function(d){if(!d)return "";var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));if(!m)return String(d);var N=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return (+m[3])+" "+N[+m[2]-1]+" "+m[1];},providerLabel:function(p){return PROV[p]||p||"Unknown source";},kindLabel:function(k){return k?(KIND[k]||k):"Imported (unclassified)";},statusLabel:function(s){return STATUS[s]||s;},stateLabel:function(s){return STATE[s]||s;}};
 })();
 """.replace("%FIELDS%", _json.dumps(FIELD_ORDER))
 

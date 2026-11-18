@@ -117,6 +117,7 @@ function renderField(f,fo){
   var h='<section class="card field '+DX.esc(st)+'" data-testid="field-'+f+'" data-status="'+DX.esc(st)+'"><div class="field-main"><div class="label">'+DX.esc(DX.fieldLabel(f))+'</div>';
   if(has)h+='<div class="field-value" data-testid="field-value-'+f+'" data-value="'+DX.esc(DX.dataValue(fo.value))+'">'+DX.esc(DX.fmtValue(f,fo.value))+'</div>';
   else h+='<div class="field-none">No value found yet</div>';
+  if(has&&fo.true_from)h+='<p class="small muted" style="margin:0 0 6px">In effect since '+DX.esc(DX.fmtDay(fo.true_from))+'</p>';
   h+='<div class="row">';
   if(st==="contested")h+='<span class="badge b-contested" data-testid="field-contested-'+f+'">Sources disagree</span>';
   else h+=DX.badge(st==="known"?"known":"unknown",st==="known"?"Known":"Unknown");
@@ -137,6 +138,28 @@ function renderField(f,fo){
   });
   return h+'</div></section>';
 }
+function renderExecutives(fo){
+  fo=fo||{status:"unknown",value:null,citations:[],candidates:[]};
+  var st=fo.status||"unknown",members=Array.isArray(fo.value)?fo.value:[];
+  var h='<section class="card field execs '+DX.esc(st)+'"><div class="field-main"><div class="label">Executives</div>';
+  if(members.length){
+    h+='<ul class="exec-list">';
+    members.forEach(function(m){
+      var sel=null;(fo.candidates||[]).forEach(function(c){if(!sel&&c.title===m.title&&c.selected)sel=c;});
+      h+='<li><span class="exec-title">'+DX.esc(DX.titleLabel(m.title))+'</span><span class="exec-name">'+DX.esc(m.name)+'</span>'+(sel&&sel.true_from?'<span class="small muted">In effect since '+DX.esc(DX.fmtDay(sel.true_from))+'</span>':'')+'</li>';
+    });
+    h+='</ul>';
+  }else h+='<div class="field-none">No executives found yet</div>';
+  h+='<div class="row">'+(st==="contested"?'<span class="badge b-contested">Sources disagree</span>':DX.badge(st==="known"?"known":"unknown",st==="known"?"Known":"Unknown"))+'</div>';
+  if(st==="contested")h+='<p class="small muted" style="margin:8px 0 0">Sources name different people for at least one role. <a href="/dossiers/'+encodeURIComponent(D)+'/evidence">Compare sources</a></p>';
+  h+='</div><div class="cites">';
+  var cs=fo.citations||[];
+  if(!cs.length)h+='<p class="muted small" style="margin:0">No sources for the executives yet.</p>';
+  cs.forEach(function(c){
+    h+='<figure class="cite"><blockquote>'+DX.esc(c.excerpt)+'</blockquote><figcaption><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a> · via '+DX.esc(DX.providerLabel(c.provider))+'</figcaption></figure>';
+  });
+  return h+'</div></section>';
+}
 function renderDossier(b){
   dstate.innerHTML='<span class="badge b-'+DX.esc(b.state)+'" data-testid="dossier-state">'+DX.esc(b.state)+'</span>';
   var u=b.spent_units;
@@ -148,6 +171,7 @@ function renderDossier(b){
   if(b.state==="building")h+='<div class="msg info" data-testid="dossier-building"><span class="spinner"></span>Research is running. This page updates by itself when it finishes.</div>';
   if(b.state==="failed")h+='<div class="msg error" data-testid="dossier-failed">The last research run failed'+(b.researched_at?'; showing the most recent successful results.':'. Try refreshing.')+'</div>';
   DX.FIELDS.forEach(function(f){h+=renderField(f,(b.fields||{})[f]||{status:"unknown",value:null,citations:[],candidates:[]});});
+  h+=renderExecutives((b.fields||{}).executives);
   view.innerHTML=h;shown=true;
 }
 function setPoll(on){
@@ -188,10 +212,21 @@ load();
 """
 
 
+STYLE = """<style>
+.exec-list{list-style:none;margin:6px 0 10px;padding:0;display:grid;gap:10px}
+.exec-list li{display:grid;gap:2px;min-width:0}
+.exec-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
+.exec-name{font-size:1.3rem;font-weight:700;overflow-wrap:anywhere}
+.field.execs.known{border-left:6px solid #3a9b62}
+.field.execs.contested{border-left:6px solid #d79a1e}
+.field.execs.unknown{border-left:6px solid #a4a9b1}
+</style>"""
+
+
 def list_page():
     return render_page("Dossiers", LIST_HTML, LIST_JS, active="list")
 
 
 def dossier_page(domain):
     main = DOSSIER_HTML.replace("{D}", esc(domain)).replace("{DU}", esc(quote(domain, safe="")))
-    return render_page(domain, main, DOSSIER_JS)
+    return render_page(domain, STYLE + main, DOSSIER_JS)

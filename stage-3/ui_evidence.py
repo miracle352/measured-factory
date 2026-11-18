@@ -66,6 +66,28 @@ function cand(f,c,i){
   h+='<div class="src"><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a><br>'+(c.published_at?'Published '+DX.esc(DX.fmtTime(c.published_at)):'Publication date not stated')+(c.retrieved_at?' · Retrieved '+DX.esc(DX.fmtTime(c.retrieved_at)):'')+'</div>';
   return h+'</article>';
 }
+function execCand(c){
+  var sel=c.selected===true;
+  var h='<article class="cand'+(sel?' selected':'')+'"><div class="cv">'+DX.esc(c.value)+'</div><div class="tags">';
+  h+=sel?'<span class="tag sel">&#10003; Selected person</span>':'<span class="tag">Not selected</span>';
+  h+='<span class="tag">'+DX.esc(DX.kindLabel(c.kind))+'</span><span class="tag">'+DX.esc(DX.providerLabel(c.provider))+'</span>'+(c.true_from?'<span class="tag">In effect since '+DX.esc(DX.fmtDay(c.true_from))+'</span>':'')+'</div>';
+  h+='<blockquote>'+DX.esc(c.excerpt)+'</blockquote>';
+  h+='<div class="src"><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a><br>'+(c.published_at?'Published '+DX.esc(DX.fmtTime(c.published_at)):'Publication date not stated')+(c.retrieved_at?' · Retrieved '+DX.esc(DX.fmtTime(c.retrieved_at)):'')+'</div>';
+  return h+'</article>';
+}
+function execSection(fo){
+  fo=fo||{status:"unknown",candidates:[]};
+  var cs=fo.candidates||[],st=fo.status||"unknown";
+  var h='<section class="card efield"><h2>Executives '+(st==="contested"?DX.badge("contested","Sources disagree"):DX.badge(st==="known"?"known":"unknown",DX.statusLabel(st)))+'</h2><div class="cands">';
+  if(!cs.length)h+='<div class="empty">No source names a chief financial, operating or technology officer yet.</div>';
+  ["cfo","coo","cto"].forEach(function(t){
+    var mine=cs.filter(function(c){return c.title===t;});
+    if(!mine.length)return;
+    h+='<h3 class="small muted" style="text-transform:uppercase;letter-spacing:.06em">'+DX.esc(DX.titleLabel(t))+'</h3>';
+    mine.forEach(function(c){h+=execCand(c);});
+  });
+  return h+'</div></section>';
+}
 function render(b){
   var h='<p class="small muted">'+DX.badge(b.state,DX.stateLabel(b.state))+(b.researched_at?' &nbsp;Researched '+DX.esc(DX.fmtTime(b.researched_at)):' &nbsp;Not researched yet')+'</p>';
   DX.FIELDS.forEach(function(f){
@@ -78,6 +100,7 @@ function render(b){
     cs.forEach(function(c,i){h+=cand(f,c,i);});
     h+='</div></section>';
   });
+  h+=execSection((b.fields||{}).executives);
   view.innerHTML=h;shown=true;
 }
 function load(){
