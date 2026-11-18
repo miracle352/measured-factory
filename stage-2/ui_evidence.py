@@ -26,6 +26,7 @@ STYLE = """<style>
 .cand .src a{overflow-wrap:anywhere}
 .ci{flex-direction:column;flex-wrap:nowrap;align-items:stretch;justify-content:flex-start;text-align:left;gap:6px}
 .ci .vals{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start;align-self:flex-start}
+.fkey{font-size:.8rem;background:#ebebe8;border-radius:4px;padding:0 6px;color:#333b47}
 .ci .small{align-self:flex-start}
 .ci .top{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;width:100%;justify-content:space-between}
 </style>"""
@@ -153,7 +154,7 @@ function render(items){
     var vals=distinct(it.field,it.fo);
     h+='<a class="item ci" data-testid="contested-item-'+DX.esc(it.domain)+'-'+it.field+'" data-value="'+DX.esc(DX.dataValue(it.fo.value))+'" href="/dossiers/'+encodeURIComponent(it.domain)+'/evidence">';
     h+='<span class="top"><span class="dom">'+DX.esc(it.domain)+'</span>'+DX.badge("contested","Sources disagree")+'</span>';
-    h+='<span class="sub">'+DX.esc(DX.fieldLabel(it.field))+' &middot; selected <strong>'+DX.esc(fmtV(it.field,it.fo.value))+'</strong></span>';
+    h+='<span class="sub">'+DX.esc(DX.fieldLabel(it.field))+' <code class="fkey">'+it.field+'</code> &middot; selected <strong>'+DX.esc(fmtV(it.field,it.fo.value))+'</strong></span>';
     h+='<span class="vals">';
     vals.forEach(function(v){h+='<span class="tag'+(JSON.stringify(v)===JSON.stringify(it.fo.value)?' sel':'')+'">'+DX.esc(fmtV(it.field,v))+'</span>';});
     h+='</span><span class="small">Compare the sources &rarr;</span></a>';
