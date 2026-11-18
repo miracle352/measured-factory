@@ -15,3 +15,17 @@
 
 - Choice: A. C is cheaper but misses fields only research reaches (spec counts research claims as evidence). Max single-build spend 47 (limit 80).
 - Stage 1 closing: review rounds 2 (API at b7b523f, support.py at eb22aeb, then full at d34251d); examiner rows added 2; failures caught in product code: 0 (examiner-side probe fixes only); outside-call cost: mock only, max 47 units/build; probes 1068 + 179 passed; examiner accepted d34251d (stage-1/ unchanged to final). Final isolated check r-s1-1: "claimed stage: 1".
+
+## Stage 2
+- Cost per correct result (mock, 12 companies x 2 epochs; raw: factory/stage-2/measure-raw.md):
+
+| Strategy | Units | Correct | Cost/correct | Max single build |
+|---|---|---|---|---|
+| rendered extract + research + follow-ups (chosen) | 804 | 62 | 12.97 | 72 |
+| plain extract + research + follow-ups | 486 | 62 | 7.84 | 42 |
+| rendered, no follow-ups | - | - | 15.82 | - |
+| rendered, no research | - | - | 8.93 | - |
+
+- Choice: rendered. Plain is cheaper on the mock but the spec's page text is browser text; plain text may differ from it on the hidden corpus. 429 weather gave identical results (24 refused calls each, no cost).
+- Deviations: builder-a W-2/W-4/W-5 code in d84c604 (marker commits d658edf, a403779); W-3/W-3b code in f88e425 (45bd83a marker). builder-b W-10..W-12 code in ui_pages.py commit; feb3484 only RUN.md.
+- Rows added by examiner: 11 (R-60..R-70).
