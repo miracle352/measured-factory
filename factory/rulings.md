@@ -17,3 +17,7 @@
 - Stage-2 exports of our own service hold only the latest fields (no builds list). Import treats them as one ready build at `researched_at` (as for stage-1), imported candidates' learned_at = retrieved_at; page-version true_from = UTC date part of the candidate's published_at, else null (Effective is not recoverable). If an export does carry a `builds` list, keep it (time, outcome, spent) and its candidates.
 - All new endpoints (`/changes`, `/history`, `/values`, as_of) require a bearer token (401 otherwise), as every non-listed endpoint in §6.
 - Validation (422) is checked before 404 on as_of / true_at, as in earlier stages.
+
+## Stage 4
+- Investors typing: a name present only in the earlier value (removed) does not count as a correction, so any removal makes the entry `change` (spec defines the correction test for new names only; consistent with stage-3 disappearing = change).
+- Invalid Registrant line falls back to the own-URL host; invalid First-Published-By / Canonical lines are ignored.

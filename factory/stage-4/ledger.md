@@ -75,3 +75,8 @@ Interfaces (agree details directly in the room):
 | R-58 | Stage-3 export keeps builds; after upgrade as_of and /values answer from them as before, with new keys | B | P | W-12 | open |
 | R-59 | After import investors is unknown in imported state and every kept build, no history entry; first ready build with a value adds `change` (or `initial` if first ready build of dossier) | B | P | W-12 | open |
 | R-60 | Stages 1-3 behaviour unchanged (supplied checks stages 1-3) | A,B | S | all | open |
+| R-61 | Failed builds contribute nothing to standing origins / corroborated_since (ready builds only) (exam E4-26) | B | P | W-8 | open |
+| R-62 | After restart a batch becomes `done` once its builds end (E4-69) | B | P | W-13 | open |
+| R-63 | Batch ids do not collide after restart or import (E4-75) | B | P | W-13 | open |
+| R-64 | Canonical equal to the page's own URL: rule 2 does not apply; Canonical cycles terminate via the 3-follow limit (E4-14/15) | A | P | W-2a | open |
+| R-65 | Invalid Registrant or Canonical/First-Published-By value: invalid Registrant falls back to own-URL host; invalid lineage domains are ignored (E4-06) | A | P | W-1 | open |
