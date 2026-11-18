@@ -8,9 +8,10 @@ rm -rf $SRC; mkdir -p $SRC
 (cd $REPO && git archive HEAD stage-1 stage-2 stage-3) | tar -x -C $SRC
 H=$HOME/hack/sf-buildathon-2026
 T=$H/challenges/dossier/test
-mkdir -p $T/exam_s3 && cp $REPO/factory/stage-3/probes/{conftest.py,probe_api.py} $T/exam_s3/
+mkdir -p $T/exam_s3 && cp $REPO/factory/stage-3/probes/{conftest.py,probe_api.py,probe_ui.py} $T/exam_s3/
 cd $H && . .venv/bin/activate
+export SHOTS=$REPO/factory/stage-3/screens
 rm -rf $HOME/hack/checks/$L
 timeout 3400 python -m harness run --track dossier --build $SRC/stage-3 --previous-build $SRC/${PREV:-stage-2} \
   --implementation-stage 3 --stages 3 --mode $MODE --out $HOME/hack/checks/$L \
-  $T/exam_s3/probe_api.py "$@" 2>&1 | tail -20
+  $T/exam_s3/probe_api.py $T/exam_s3/probe_ui.py "$@" 2>&1 | tail -20
