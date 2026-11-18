@@ -88,3 +88,6 @@ Interfaces (A implements, B calls):
 | R-68 | Dossier screen/evidence show executives with human labels (title names, no raw keys), fine at phone and desktop width | A | P | W-12 | open |
 | R-69 | RUN.md/Dockerfile: state directory on container filesystem, documented; image builds and starts | B | S | W-11 | open |
 | R-70 | Regression: stage-1 and stage-2 supplied checks still pass in stage-3 | A,B | S | all | open |
+| R-71 | as_of boundary is inclusive: as_of equal to a build's time returns that build (examiner E-39) | B | P | W-8 | open |
+| R-72 | A version holds on its own true_from day itself (true_at == true_from is inside) (examiner E-46) | A | P | W-5 | open |
+| R-73 | Same selected value = JSON-equal (stage-2), including executives arrays, when deciding no-change vs entry (examiner E-33) | B | P | W-6b | open |
