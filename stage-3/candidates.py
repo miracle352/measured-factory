@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 KINDS = ("own", "filing", "news", "aggregator")
+EXEC_TITLES = ("cfo", "coo", "cto")
 _AUTHORITY = {"own": 0, "filing": 0, "news": 1, "aggregator": 2}
 PROVIDER_ORDER = ("nimble", "tavily", "kernel", "browserbase")
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -75,6 +76,45 @@ def parse_published(text: str | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
+def published_date(published_at: str | None) -> str | None:
+    """UTC date part (YYYY-MM-DD) of a valid RFC 3339 timestamp, else None."""
+    dt = _parse_dt(published_at) if isinstance(published_at, str) else None
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).date().isoformat()
+
+
+_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$", re.ASCII)
+
+
+def parse_effective(text: str | None) -> str | None:
+    """`Effective:` header value -> YYYY-MM-DD when it is a valid calendar date, else None."""
+    m = _DATE.match((text or "").strip())
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date().isoformat()
+    except ValueError:
+        return None
+
+
+def page_true_from(effective: str | None, published_at: str | None) -> str | None:
+    """true_from of a page: its valid Effective date, else the UTC date of its published_at, else None."""
+    return parse_effective(effective) or published_date(published_at)
+
+
+def cand_true_from(c: dict) -> str | None:
+    if "true_from" in c:
+        return c.get("true_from")
+    return published_date(c.get("published_at"))
+
+
+def cand_key(field: str, cand: dict) -> tuple:
+    """Identity for learned_at: (field, title-or-None, value, url, provider)."""
+    title = cand.get("title") if field == "executives" else None
+    return (field, title, value_key(cand.get("value")), cand.get("url"), cand.get("provider"))
+
+
 def _instant(published_at: str | None) -> int | None:
     dt = _parse_dt(published_at) if isinstance(published_at, str) else None
     if dt is None:
@@ -132,33 +172,73 @@ def _dedupe(ranked: list[dict]) -> list[dict]:
     return out
 
 
-def assemble_field(cands: list[dict]) -> dict:
+def _cand_out(c: dict, selected: bool, title: str | None = None) -> dict:
+    d = {}
+    if title is not None:
+        d["title"] = title
+    d.update({
+        "value": norm_value(c.get("value")),
+        "url": c.get("url"),
+        "excerpt": c.get("excerpt"),
+        "provider": c.get("provider"),
+        "kind": c.get("kind"),
+        "published_at": c.get("published_at"),
+        "retrieved_at": c.get("retrieved_at"),
+        "true_from": cand_true_from(c),
+        "selected": selected,
+    })
+    if "learned_at" in c:
+        d["learned_at"] = c["learned_at"]
+    return d
+
+
+def _assemble_plain(cands: list[dict]) -> dict:
     ranked = _dedupe(rank(cands or []))
     if not ranked:
-        return {"value": None, "status": "unknown", "citations": [], "candidates": []}
-    out = []
-    for i, c in enumerate(ranked):
-        d = {
-            "value": norm_value(c.get("value")),
-            "url": c.get("url"),
-            "excerpt": c.get("excerpt"),
-            "provider": c.get("provider"),
-            "kind": c.get("kind"),
-            "published_at": c.get("published_at"),
-            "retrieved_at": c.get("retrieved_at"),
-            "selected": i == 0,
-        }
-        out.append(d)
+        return {"value": None, "status": "unknown", "true_from": None, "citations": [], "candidates": []}
+    out = [_cand_out(c, i == 0) for i, c in enumerate(ranked)]
     top = value_key(out[0]["value"])
     distinct = {value_key(c["value"]) for c in out}
     citations = [{"url": c["url"], "excerpt": c["excerpt"], "provider": c["provider"]}
                  for c in out if value_key(c["value"]) == top]
     return {"value": out[0]["value"], "status": "known" if len(distinct) == 1 else "contested",
+            "true_from": out[0]["true_from"], "citations": citations, "candidates": out}
+
+
+def _assemble_executives(cands: list[dict]) -> dict:
+    members, out, citations, contested = [], [], [], False
+    for t in EXEC_TITLES:
+        mine = [c for c in (cands or []) if c.get("title") == t]
+        ranked = _dedupe(rank(mine))
+        if not ranked:
+            continue
+        rows = [_cand_out(c, i == 0, t) for i, c in enumerate(ranked)]
+        out.extend(rows)
+        name = rows[0]["value"]
+        members.append((t, name, rows[0]["true_from"]))
+        if len({value_key(r["value"]) for r in rows}) > 1:
+            contested = True
+        key = value_key(name)
+        citations.extend({"url": r["url"], "excerpt": r["excerpt"], "provider": r["provider"]}
+                         for r in rows if value_key(r["value"]) == key)
+    if not members:
+        return {"value": None, "status": "unknown", "true_from": None, "citations": [], "candidates": []}
+    tfs = [m[2] for m in members]
+    tf = None if any(x is None for x in tfs) else max(tfs)
+    return {"value": [{"title": t, "name": n} for t, n, _ in members],
+            "status": "contested" if contested else "known", "true_from": tf,
             "citations": citations, "candidates": out}
 
 
-def empty_field() -> dict:
-    return assemble_field([])
+def assemble_field(cands: list[dict], field: str | None = None) -> dict:
+    """{"value","status","true_from","citations","candidates"}; field 'executives' is assembled per title."""
+    if field == "executives":
+        return _assemble_executives(cands)
+    return _assemble_plain(cands)
+
+
+def empty_field(field: str | None = None) -> dict:
+    return assemble_field([], field)
 
 
 # --------------------------------------------------------------------------- stage-1 import
@@ -192,6 +272,7 @@ def derive_import_candidates(field: str, field_obj: dict | None, researched_at: 
             "kind": kind if kind in KINDS else None,
             "published_at": parse_published(cit.get("published_at")),
             "retrieved_at": researched_at,
+            "true_from": published_date(parse_published(cit.get("published_at"))),
         })
     return out
 
