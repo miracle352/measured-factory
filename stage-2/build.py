@@ -54,6 +54,7 @@ class Options:
     followups: bool = True           # targeted searches for fields still unknown
     max_followups: int = 6
     followup_depth: str = "lite"
+    render: bool = True              # extract through a browser (3 units/URL); False = plain extract (1 unit/URL)
 
 
 @dataclass
@@ -378,9 +379,10 @@ class _Build:
             if url in self.fetched:
                 return False
             self.fetched.add(url)
-        r = self.call("extract", url, RENDER_COST,
+        opts = {"render": True} if self.opt.render else None
+        r = self.call("extract", url, RENDER_COST if self.opt.render else EXTRACT_COST["nimble"],
                       lambda: self.router.extract([url], provider="nimble", timeout=CALL_TIMEOUT,
-                                                  provider_options={"render": True}))
+                                                  **({"provider_options": opts} if opts else {})))
         if r is None:
             return False
         for doc in r.documents:
