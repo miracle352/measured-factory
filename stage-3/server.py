@@ -2,13 +2,14 @@
 import json
 import os
 import re
+import datetime
 import socket
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 import ui
-from store import ApiError, Store, invalid, malformed, normalise_domain
+from store import ApiError, Store, invalid, malformed, normalise_domain, parse_ts
 
 STORE = Store()
 MAX_BODY = 256 * 1024 * 1024
@@ -43,6 +44,19 @@ def int_param(qs, name, default, lo, hi=None):
     if n < lo or (hi is not None and n > hi):
         raise invalid("%s out of range" % name)
     return n
+
+
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _ts_param(qs, name):
+    """RFC 3339 timestamp query parameter; an unescaped '+' offset arrives as a space."""
+    if name not in qs:
+        return None
+    v = qs[name]
+    v = re.sub(r" ([0-9]{2}:[0-9]{2})$", lambda m: "+" + m.group(1), v)
+    parse_ts(v)
+    return v
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -230,6 +244,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/auth/login" and method == "POST":
             return 200, S.login(parse_json(raw))
 
+        if path == "/changes" and method == "GET":
+            S.authenticate(self.headers.get("Authorization"))
+            since = int_param(qs, "since", 0, 0)
+            limit = int_param(qs, "limit", 50, 1, 200)
+            return 200, S.changes(since, limit)
+
         segs = path.split("/")  # ['', 'dossiers', ...]
         if len(segs) < 2 or segs[0] != "" or segs[1] != "dossiers":
             raise notfound
@@ -248,7 +268,22 @@ class Handler(BaseHTTPRequestHandler):
             return S.post_dossier(uid, key, path, body)
         if n == 3 and method == "GET":
             S.authenticate(self.headers.get("Authorization"))
-            return 200, S.get_dossier(unquote(segs[2]))
+            as_of = _ts_param(qs, "as_of")
+            return 200, S.get_dossier(unquote(segs[2]), as_of)
+        if n == 4 and segs[3] == "history" and method == "GET":
+            S.authenticate(self.headers.get("Authorization"))
+            return 200, S.history(unquote(segs[2]))
+        if n == 4 and segs[3] == "values" and method == "GET":
+            S.authenticate(self.headers.get("Authorization"))
+            ta = qs.get("true_at")
+            if ta is None or not _DATE.fullmatch(ta):
+                raise invalid("true_at must be YYYY-MM-DD")
+            try:
+                datetime.date(int(ta[:4]), int(ta[5:7]), int(ta[8:]))
+            except ValueError:
+                raise invalid("true_at must be a valid date")
+            as_of = _ts_param(qs, "as_of")
+            return 200, S.values(unquote(segs[2]), ta, as_of)
         if n == 4 and segs[3] == "refresh" and method == "POST":
             uid = S.authenticate(self.headers.get("Authorization"))
             key = self._idem_key()
