@@ -250,18 +250,21 @@ def values_for(field, s, company):
         out = []
         for base in (name, company):
             for a, b in find_words(s, base):
-                best = None
                 pos = b
+                best = None
                 while True:
                     for suf in LEGAL:
-                        if s.startswith(", " + suf, pos) and not (pos + 2 + len(suf) < len(s) and s[pos + 2 + len(suf)].isalnum()):
-                            cand = s[a:pos + 2 + len(suf)]
-                            if best is None or len(cand) < len(best):
-                                best = cand
+                        for pre in (", ", " "):
+                            if s.startswith(pre + suf, pos):
+                                e = pos + len(pre) + len(suf)
+                                if not (e < len(s) and s[e].isalnum()):
+                                    cand = s[a:e]
+                                    if best is None or len(cand) < len(best):
+                                        best = cand
                     if best:
                         break
-                    m = re.match(r" ([^\W\d_a-z][^\W\d_]+)(?![^\W\d_]|\d)", s[pos:])
-                    if not m or not (m.group(1)[0].isupper()):
+                    m = re.match(r" ([^\W\d_][^\W\d_]+)(?![^\W\d_]|\d)", s[pos:])
+                    if not m or not (m.group(1)[0].isupper() and (m.group(1)[1:].islower() or m.group(1).isupper())):
                         break
                     pos += m.end()
                 if best:
@@ -557,6 +560,7 @@ def p_concurrent_create():
     codes = sorted(r[0] for r in res)
     check(codes.count(202) == 1 and codes.count(200) == 19, "E-77", f"same key concurrent: {codes}")
     check(len({json.dumps(r[1], sort_keys=True) for r in res}) == 1, "E-77", "bodies differ")
+    wait_state(tok, dom)  # let the first build finish so its calls do not leak into the next log
     reset(); tok = login()
     with ThreadPoolExecutor(20) as ex:
         res = list(ex.map(lambda i: svc("POST", "/dossiers", {"domain": dom if i % 2 else "www." + dom}, tok=tok, key=f"diff{i}"), range(20)))
