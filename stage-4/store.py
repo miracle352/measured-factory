@@ -347,15 +347,6 @@ except Exception:
     _TAKES_BUDGET = False
 
 
-def _dbg(*a):
-    try:
-        with open("/tmp/dbg-b.log", "a") as fh:
-            fh.write("%.2f %s
-" % (time.time() % 1000, " ".join(map(str, a))))
-    except Exception:
-        pass
-
-
 class BuildBudget:
     """One build's view of its budget: the per-build cap (kept across restarts) and, for a batch's
     build, the batch's shared budget. reserve() before a call, settle() after it."""
@@ -377,12 +368,10 @@ class BuildBudget:
             if self.spent + self.reserved + n > BUILD_CAP or (
                     b is not None and b["spent"] + b["reserved"] + n > b["limit"]):
                 self.refused = True
-                _dbg("refuse", self.d["domain"], n, self.spent, self.reserved, b and (b["spent"], b["reserved"]))
                 return False
             self.reserved += n
             if b is not None:
                 b["reserved"] += n
-            _dbg("reserve", self.d["domain"], n, "spent", self.spent, "res", self.reserved, "batch", b and (b["spent"], b["reserved"]))
             # persisted before the call: a call in flight at a kill is charged after the restart
             self.d["cur_reserved"] = self.reserved
             self.store._persist()
@@ -402,7 +391,6 @@ class BuildBudget:
                 b["reserved"] = max(b["reserved"] - reserved, 0)
                 b["spent"] += actual
             self.d["cur_reserved"] = self.reserved
-            _dbg("settle", self.d["domain"], reserved, actual, "spent", self.spent)
             self.store._persist()
 
 
@@ -578,7 +566,6 @@ class Store:
                     self.clock = None
             for d in self.dossiers.values():
                 if d["building"]:
-                    _dbg("resume", d["domain"], d.get("cur_spent"), d.get("build_batch"), {k:(v["spent"]) for k,v in self.batches.items()})
                     self._start_build(d, d.get("build_batch"), resumed=True)
 
     # ---- clock
