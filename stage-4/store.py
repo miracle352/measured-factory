@@ -372,6 +372,9 @@ class BuildBudget:
             self.reserved += n
             if b is not None:
                 b["reserved"] += n
+            # persisted before the call: a call in flight at a kill is charged after the restart
+            self.d["cur_reserved"] = self.reserved
+            self.store._persist()
             return True
 
     def settle(self, reserved, actual):
@@ -387,8 +390,8 @@ class BuildBudget:
             if b is not None:
                 b["reserved"] = max(b["reserved"] - reserved, 0)
                 b["spent"] += actual
-            if actual:
-                self.store._persist()
+            self.d["cur_reserved"] = self.reserved
+            self.store._persist()
 
 
 def _res_get(res, name, default=None):
@@ -716,13 +719,14 @@ class Store:
         return {"id": "d_%d" % self.seq, "domain": domain, "last_outcome": None, "building": False,
                 "fields": unknown_fields(), "researched_at": None, "spent_units": 0,
                 "base_spent": 0, "builds": [], "history": {n: [] for n in ALL_FIELDS}, "seen": {},
-                "cur_spent": 0, "build_batch": None}
+                "cur_spent": 0, "cur_reserved": 0, "build_batch": None}
 
     def _start_build(self, d, batch_id=None, resumed=False):
         d["building"] = True
         if not resumed:
             d["cur_spent"] = 0
             d["build_batch"] = batch_id
+        d["cur_reserved"] = 0
         epoch = self.epoch
         now_iso = self.now_iso()
         batch = self.batches.get(d.get("build_batch"))
@@ -1052,6 +1056,7 @@ class Store:
                                  "spent_units": d["spent_units"], "base_spent": d["base_spent"],
                                  "builds": d["builds"], "history": d["history"], "seen": d["seen"],
                                  "cur_spent": d.get("cur_spent", 0),
+                                 "cur_reserved": d.get("cur_reserved", 0),
                                  "build_batch": d.get("build_batch")})
             state = {
                 "users": list(self.users.values()),
@@ -1062,6 +1067,7 @@ class Store:
                 "feed": self.feed,
                 "feed_seq": self.feed_seq,
                 "batches": [{k: b[k] for k in ("id", "uid", "limit", "spent", "domains", "started")}
+                            | {"reserved": b.get("reserved", 0)}
                             for b in self.batches.values()],
                 "bseq": self.bseq,
             }
@@ -1071,7 +1077,9 @@ class Store:
         state = self._dump()
         for d in state["dossiers"]:
             d.pop("building", None)
-            d["cur_spent"], d["build_batch"] = 0, None
+            d["cur_spent"], d["cur_reserved"], d["build_batch"] = 0, 0, None
+        for b in state["batches"]:
+            b["spent"] = min(b["spent"] + b.pop("reserved", 0), b["limit"])
         return {"track": "dossier", "format_version": 1, "state": state}
 
     def import_state(self, obj):
@@ -1129,7 +1137,8 @@ class Store:
                 self._restamp(dossiers[domain])
             if restore and d.get("building"):
                 dossiers[domain]["building"] = True
-                dossiers[domain]["cur_spent"] = int(d.get("cur_spent") or 0)
+                dossiers[domain]["cur_spent"] = min(int(d.get("cur_spent") or 0)
+                                                    + int(d.get("cur_reserved") or 0), BUILD_CAP)
                 dossiers[domain]["build_batch"] = d.get("build_batch")
         idem = {}
         for item in st["idem"]:
@@ -1153,6 +1162,8 @@ class Store:
             if not isinstance(rec["id"], str) or not isinstance(rec["limit"], int) \
                     or not isinstance(rec["spent"], int):
                 raise invalid("bad batch")
+            if restore:  # units reserved for calls in flight at the stop count as spent
+                rec["spent"] = min(rec["spent"] + int(b.get("reserved") or 0), rec["limit"])
             batches[rec["id"]] = rec
             m = re.fullmatch(r"b_(\d+)", rec["id"])
             if m:
@@ -1200,7 +1211,7 @@ class Store:
         out = {"id": d["id"], "domain": domain, "last_outcome": d["state"], "building": False,
                "researched_at": ra, "spent_units": spent, "base_spent": 0, "builds": [],
                "history": {n: [] for n in ALL_FIELDS}, "seen": {},
-               "cur_spent": 0, "build_batch": None}
+               "cur_spent": 0, "cur_reserved": 0, "build_batch": None}
         if isinstance(d.get("builds"), list) and isinstance(d.get("history"), dict) \
                 and isinstance(d.get("seen"), dict):
             # stage-3 state: restore as it was
