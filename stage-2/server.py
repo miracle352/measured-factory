@@ -7,7 +7,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from store import ApiError, Store, invalid, malformed
+import ui
+from store import ApiError, Store, invalid, malformed, normalise_domain
 
 STORE = Store()
 MAX_BODY = 256 * 1024 * 1024
@@ -65,6 +66,63 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionError, socket.timeout):
             self.close_connection = True
 
+    def _send_html(self, text):
+        body = text.encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError, socket.timeout):
+            self.close_connection = True
+
+    def _wants_html(self):
+        q_html, q_json = 0.0, 0.0
+        for part in (self.headers.get("Accept") or "").split(","):
+            bits = [b.strip() for b in part.split(";")]
+            mt = bits[0].lower()
+            q = 1.0
+            for b in bits[1:]:
+                if b.lower().startswith("q="):
+                    try:
+                        q = float(b[2:])
+                    except ValueError:
+                        q = 0.0
+            if mt == "text/html":
+                q_html = max(q_html, q)
+            elif mt == "application/json":
+                q_json = max(q_json, q)
+        return q_html > 0 and q_html >= q_json
+
+    def _browser_page(self, method, path):
+        """HTML for browser routes, or None when the request is an API request."""
+        if method != "GET":
+            return None
+        if path == "/":
+            return ui.list_page()
+        if path == "/signup":
+            return ui.signup_page()
+        if path == "/login":
+            return ui.login_page()
+        if path == "/contested":
+            return ui.contested_page()
+        segs = path.split("/")
+        if len(segs) in (3, 4) and segs[1] == "dossiers" and segs[2] != "":
+            if len(segs) == 4 and segs[3] != "evidence":
+                return None
+            raw = unquote(segs[2])
+            try:
+                dom = normalise_domain(raw)
+            except ApiError:
+                dom = raw.strip().lower()
+            if len(segs) == 4:
+                return ui.evidence_page(dom)
+            if self._wants_html():
+                return ui.dossier_page(dom)
+        return None
+
     def _read_body(self):
         te = (self.headers.get("Transfer-Encoding") or "").lower()
         if "chunked" in te:
@@ -110,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
             qs = {}
             for k, v in parse_qsl(parts.query, keep_blank_values=True):
                 qs.setdefault(k, v)
+            page = self._browser_page(method, path)
+            if page is not None:
+                self._send_html(page)
+                return
             status, obj = self._route(method, path, qs, raw)
             self._send(status, obj)
         except ApiError as e:
