@@ -134,8 +134,10 @@ def test_u02_empty_and_missing_states(world, sized):
     page.goto("/dossiers/nobody-here.test"); expect(tid(page, "dossier-not-found")).to_be_visible()
     assert tid(page, "field-ceo").count() == 0
     shot(page, f"dossier-notfound-{n}")
-    page.goto("/dossiers/nobody-here.test/evidence")
-    expect(tid(page, "dossier-not-found")).to_be_visible()
+    r = page.goto("/dossiers/nobody-here.test/evidence")
+    assert r.status < 500  # F-154: spec names no testid for a missing dossier on evidence
+    expect(page.locator("main, body").first).to_contain_text("nobody-here.test")
+    assert no_hscroll(page); shot(page, f"evidence-notfound-{n}")
 
 
 def test_u03_failed_and_unknown_fields(world, corpus, web, sized):
@@ -296,7 +298,14 @@ def test_u09_refresh_uncertain_and_follow(world, build, corpus, web, page):
     tid(page, "dossier-refresh").click()
     expect(tid(page, "refresh-uncertain")).to_have_count(0)
     assert len(keys) == 2 and keys[0] == keys[1]
-    expect(tid(page, "dossier-state")).to_have_text("ready", timeout=60000)
+    end = time.monotonic() + 40
+    while time.monotonic() < end:  # the build the dropped request started must run once
+        body = world.alice.get(f"/dossiers/{d}").json()
+        if body["state"] == "ready" and dw.gatherings(web.log(), d) == before + 1:
+            break
+        time.sleep(0.3)
+    expect(tid(page, "dossier-state")).to_have_text("ready", timeout=30000)
+    time.sleep(2)
     assert dw.gatherings(web.log(), d) == before + 1
 
 
