@@ -560,8 +560,10 @@ def test_p30_history_and_feed_match_selected_changes(world, web, clock, build, r
                 e = got[-1]
                 if e["type"] != t:
                     bad.append((d, f, "type", e["type"], t))
-                if fx.instant(e["learned_at"]) != fx.instant(T1):
-                    bad.append((d, f, "learned_at"))
+                if e["value"] is None and e["learned_at"] is None:
+                    pass  # spec: learned_at is null for an unknown selected value
+                elif e["learned_at"] is None or fx.instant(e["learned_at"]) != fx.instant(T1):
+                    bad.append((d, f, "learned_at", e["learned_at"]))
                 if e["value"] != b1["fields"][f]["value"]:
                     bad.append((d, f, "value"))
                 if e["value"] is None and (e["true_from"] is not None or e["citations"] != []):
