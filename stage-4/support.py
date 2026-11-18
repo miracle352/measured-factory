@@ -35,6 +35,7 @@ STATEMENT_PHRASES = {
     "cfo": ["chief financial officer", "CFO"],
     "coo": ["chief operating officer", "COO"],
     "cto": ["chief technology officer", "CTO"],
+    "investors": ["investor", "investors", "led by", "backed by", "participated"],
 }
 
 NEGATING_PHRASES = ["in talks to", "plans to", "planning to", "wants to", "expects to", "hopes to", "aims to",
@@ -403,7 +404,57 @@ def _x_legal_name(text: str, domain: str) -> list:
     return out
 
 
+INVESTOR_SUFFIXES = ("Ventures", "Capital", "Partners", "Fund", "Investments", "Holdings", "Equity")
+_LEAD_RE = re.compile(_NOT_ALNUM_BEFORE + r"(?:led by|backed by) ", re.IGNORECASE)
+
+
+def _x_investors(text: str, domain: str) -> list:
+    spans = [(m.start(), m.end()) for m in _name_regex(domain).finditer(text)]
+    spans += [(m.start(), m.end()) for m in _PHRASE_RE["investors"].finditer(text)]
+    spans.sort()
+    merged: list[list[int]] = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    parts, pos = [], 0
+    for s, e in merged:
+        parts.append(text[pos:s])
+        parts.append("\x00")
+        pos = e
+    parts.append(text[pos:])
+    t = "".join(parts)
+    toks = _tokens(t)
+    out: list[str] = []
+    i = 0
+    while i < len(toks):
+        if not _is_cap_word(toks[i][2]):
+            i += 1
+            continue
+        k = i
+        while k + 1 < len(toks) and t[toks[k][1]:toks[k + 1][0]] == " " and _is_cap_word(toks[k + 1][2]):
+            k += 1
+        if k > i and toks[k][2] in INVESTOR_SUFFIXES:
+            out.append(t[toks[i][0]:toks[k][1]])
+        i = k + 1
+    if _amounts(text, _numbers(text)):
+        otoks = _tokens(text)
+        by_start = {x[0]: j for j, x in enumerate(otoks)}
+        for m in _LEAD_RE.finditer(text):
+            j = by_start.get(m.end())
+            if j is None or not _is_cap_word(otoks[j][2]):
+                continue
+            k = j
+            while (k + 1 < len(otoks) and text[otoks[k][1]:otoks[k + 1][0]] == " "
+                   and _is_cap_word(otoks[k + 1][2])):
+                k += 1
+            out.append(text[otoks[j][0]:otoks[k][1]])
+    return out
+
+
 _EXTRACTORS = {
+    "investors": _x_investors,
     "legal_name": _x_legal_name,
     "hq_city": _x_hq_city,
     "ceo": lambda t, d: _x_person(t, d, "ceo"),
@@ -441,5 +492,7 @@ def extract_values(field: str, excerpt: str, domain: str) -> list:
 def supports(field: str, value, excerpt: str, domain: str) -> bool:
     if value is None or isinstance(value, bool):
         return False
+    if field == "investors":
+        return isinstance(value, str) and value in extract_values(field, excerpt, domain)
     values = extract_values(field, excerpt, domain)
     return bool(values) and all(v == value for v in values)
