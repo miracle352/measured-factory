@@ -110,6 +110,8 @@ if(!DX.tok()){document.getElementById("app").innerHTML="";DX.gate(document.getEl
 var path="/dossiers/"+encodeURIComponent(D);
 var rd=DX.reader(),poll=null,inflight=0,shown=false;
 function cmp(v){return JSON.stringify(v);}
+var MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDate(iso){var d=new Date(iso);if(isNaN(d.getTime()))return String(iso);return d.getUTCDate()+" "+MON[d.getUTCMonth()]+" "+d.getUTCFullYear();}
 function renderField(f,fo){
   var st=fo.status||"unknown",has=fo.value!==null&&fo.value!==undefined;
   var h='<section class="card field '+DX.esc(st)+'" data-testid="field-'+f+'" data-status="'+DX.esc(st)+'"><div class="field-main"><div class="label">'+DX.esc(DX.fieldLabel(f))+'</div>';
@@ -128,7 +130,10 @@ function renderField(f,fo){
   var cs=fo.citations||[];
   if(!cs.length)h+='<p class="muted small" style="margin:0">No sources for this field yet.</p>';
   cs.forEach(function(c,i){
-    h+='<figure class="cite" data-testid="citation-'+f+'-'+(i+1)+'" data-provider="'+DX.esc(c.provider)+'"><blockquote>'+DX.esc(c.excerpt)+'</blockquote><figcaption><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a> · via '+DX.esc(DX.providerLabel(c.provider))+'</figcaption></figure>';
+    var cd=null;(fo.candidates||[]).forEach(function(x){if(!cd&&x.url===c.url&&x.provider===c.provider)cd=x;});
+    if(!cd)(fo.candidates||[]).forEach(function(x){if(!cd&&x.url===c.url)cd=x;});
+    var meta=cd?' · '+DX.esc(DX.kindLabel(cd.kind))+(cd.published_at?' · published '+DX.esc(fmtDate(cd.published_at)):' · publication date unknown'):'';
+    h+='<figure class="cite" data-testid="citation-'+f+'-'+(i+1)+'" data-provider="'+DX.esc(c.provider)+'"><blockquote>'+DX.esc(c.excerpt)+'</blockquote><figcaption><a href="'+DX.esc(c.url)+'" target="_blank" rel="noopener noreferrer">'+DX.esc(DX.host(c.url))+'</a> · via '+DX.esc(DX.providerLabel(c.provider))+meta+'</figcaption></figure>';
   });
   return h+'</div></section>';
 }

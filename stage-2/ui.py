@@ -108,7 +108,7 @@ var DX=(function(){
   var FIELDS=%FIELDS%;
   var LABELS={legal_name:"Legal name",hq_city:"Headquarters city",ceo:"Chief executive",founded_year:"Year founded",headcount_range:"Headcount",funding_total:"Total funding"};
   var PROV={nimble:"Nimble",tavily:"Tavily",kernel:"Kernel browser",browserbase:"Browserbase"};
-  var KIND={own:"Company website",filing:"Filing registry",news:"News report",aggregator:"Data aggregator"};
+  var KIND={own:"Company site",filing:"Filing registry",news:"News report",aggregator:"Data aggregator"};
   var STATUS={known:"Known",unknown:"Unknown",contested:"Contested"};
   var STATE={building:"Building",ready:"Ready",failed:"Failed"};
   function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
