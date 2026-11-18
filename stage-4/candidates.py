@@ -42,6 +42,36 @@ def normalise_host(url: str) -> str:
     return host
 
 
+_HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def norm_domain(text: str | None) -> str | None:
+    """Domain normalised as section 4 (trim, lowercase, one trailing '.', one leading 'www.'); None when invalid."""
+    if not isinstance(text, str):
+        return None
+    d = text.strip().lower()
+    if d.endswith("."):
+        d = d[:-1]
+    if d.startswith("www."):
+        d = d[4:]
+    return d if _HOST_RE.match(d) else None
+
+
+def lineage(info: dict, url: str) -> dict:
+    """Lineage of a page from its lower-cased header info: registrant, canonical URL (or None), first_published_by.
+
+    An invalid Registrant falls back to the host of the page's own URL; invalid First-Published-By / Canonical are
+    ignored.  A Canonical equal to the page's own URL is no canonical.
+    """
+    own_host = normalise_host(url)
+    reg = norm_domain(info.get("registrant")) or own_host
+    fpb = norm_domain(info.get("first-published-by"))
+    canon = (info.get("canonical") or "").strip()
+    if not canon or "://" not in canon or not normalise_host(canon) or canon == (url or "").strip():
+        canon = None
+    return {"registrant": reg, "canonical": canon, "first_published_by": fpb, "own_host": own_host}
+
+
 def page_kind(headers_kind: str | None, url: str, company_domain: str) -> str:
     k = (headers_kind or "").strip()  # exact match, case-sensitive (ruling): "News" takes the default rule
     if k in KINDS:
@@ -172,6 +202,10 @@ def _dedupe(ranked: list[dict]) -> list[dict]:
     return out
 
 
+def cand_origin(c: dict) -> str:
+    return c.get("origin") or normalise_host(c.get("url") or "")
+
+
 def _cand_out(c: dict, selected: bool, title: str | None = None) -> dict:
     d = {}
     if title is not None:
@@ -185,6 +219,7 @@ def _cand_out(c: dict, selected: bool, title: str | None = None) -> dict:
         "published_at": c.get("published_at"),
         "retrieved_at": c.get("retrieved_at"),
         "true_from": cand_true_from(c),
+        "origin": cand_origin(c),
         "selected": selected,
     })
     if "learned_at" in c:
@@ -192,21 +227,29 @@ def _cand_out(c: dict, selected: bool, title: str | None = None) -> dict:
     return d
 
 
+def _unknown() -> dict:
+    return {"value": None, "status": "unknown", "true_from": None, "citations": [], "candidates": [],
+            "origins": [], "corroborated": False}
+
+
 def _assemble_plain(cands: list[dict]) -> dict:
     ranked = _dedupe(rank(cands or []))
     if not ranked:
-        return {"value": None, "status": "unknown", "true_from": None, "citations": [], "candidates": []}
+        return _unknown()
     out = [_cand_out(c, i == 0) for i, c in enumerate(ranked)]
     top = value_key(out[0]["value"])
     distinct = {value_key(c["value"]) for c in out}
     citations = [{"url": c["url"], "excerpt": c["excerpt"], "provider": c["provider"]}
                  for c in out if value_key(c["value"]) == top]
+    origins = sorted({c["origin"] for c in out if value_key(c["value"]) == top})
     return {"value": out[0]["value"], "status": "known" if len(distinct) == 1 else "contested",
-            "true_from": out[0]["true_from"], "citations": citations, "candidates": out}
+            "true_from": out[0]["true_from"], "citations": citations, "candidates": out,
+            "origins": origins, "corroborated": len(origins) >= 2}
 
 
 def _assemble_executives(cands: list[dict]) -> dict:
     members, out, citations, contested = [], [], [], False
+    by_member: list[list[dict]] = []
     for t in EXEC_TITLES:
         mine = [c for c in (cands or []) if c.get("title") == t]
         ranked = _dedupe(rank(mine))
@@ -219,21 +262,65 @@ def _assemble_executives(cands: list[dict]) -> dict:
         if len({value_key(r["value"]) for r in rows}) > 1:
             contested = True
         key = value_key(name)
+        by_member.append([r for r in rows if value_key(r["value"]) == key])
         citations.extend({"url": r["url"], "excerpt": r["excerpt"], "provider": r["provider"]}
                          for r in rows if value_key(r["value"]) == key)
     if not members:
-        return {"value": None, "status": "unknown", "true_from": None, "citations": [], "candidates": []}
+        return _unknown()
     tfs = [m[2] for m in members]
     tf = None if any(x is None for x in tfs) else max(tfs)
     return {"value": [{"title": t, "name": n} for t, n, _ in members],
             "status": "contested" if contested else "known", "true_from": tf,
-            "citations": citations, "candidates": out}
+            "citations": citations, "candidates": out,
+            "origins": sorted({r["origin"] for rs in by_member for r in rs}),
+            "corroborated": all(len({r["origin"] for r in rs}) >= 2 for rs in by_member)}
+
+
+def investor_members(cands: list[dict]) -> list[str]:
+    """Names that are members: a candidate of kind own or filing, or candidates from two or more origins."""
+    by: dict[str, dict] = {}
+    for c in cands or []:
+        v = norm_value(c.get("value"))
+        if not isinstance(v, str):
+            continue
+        d = by.setdefault(v, {"strong": False, "origins": set()})
+        if c.get("kind") in ("own", "filing"):
+            d["strong"] = True
+        d["origins"].add(cand_origin(c))
+    return sorted(n for n, d in by.items() if d["strong"] or len(d["origins"]) >= 2)
+
+
+def _assemble_investors(cands: list[dict]) -> dict:
+    ranked = _dedupe(rank([c for c in (cands or []) if isinstance(norm_value(c.get("value")), str)]))
+    names = investor_members(ranked)
+    if not names:
+        out = [_cand_out(c, False) for c in ranked]
+        d = _unknown()
+        d["candidates"] = out
+        return d
+    nameset = set(names)
+    out = [_cand_out(c, norm_value(c.get("value")) in nameset) for c in ranked]
+    citations, tfs, origins, corro = [], [], set(), True
+    for n in names:
+        rows = [r for r in out if r["value"] == n]
+        citations.extend({"url": r["url"], "excerpt": r["excerpt"], "provider": r["provider"]} for r in rows)
+        nn = [r["true_from"] for r in rows if r["true_from"] is not None]
+        tfs.append(min(nn) if nn else None)
+        os_ = {r["origin"] for r in rows}
+        origins |= os_
+        if len(os_) < 2:
+            corro = False
+    tf = None if any(x is None for x in tfs) else max(tfs)
+    return {"value": names, "status": "known", "true_from": tf, "citations": citations, "candidates": out,
+            "origins": sorted(origins), "corroborated": corro}
 
 
 def assemble_field(cands: list[dict], field: str | None = None) -> dict:
     """{"value","status","true_from","citations","candidates"}; field 'executives' is assembled per title."""
     if field == "executives":
         return _assemble_executives(cands)
+    if field == "investors":
+        return _assemble_investors(cands)
     return _assemble_plain(cands)
 
 
