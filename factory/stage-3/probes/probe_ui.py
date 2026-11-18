@@ -12,7 +12,7 @@ import screens
 from harness.http import assert_status
 
 pytestmark = pytest.mark.stage(3)
-SHOTS = pathlib.Path(os.environ.get("SHOTS", "/tmp/shots"))
+SHOTS = pathlib.Path(os.environ.get("SHOTS") or ("/out/shots" if os.path.isdir("/out") else "/tmp/shots"))
 SIZES = {"phone": (375, 800), "desktop": (1280, 900)}
 
 
@@ -76,8 +76,15 @@ def test_u02_contested_ignores_executives(world, build, corpus, sized):
     page = sized
     n = page.size_name
     bodies = {d: build(d) for d in domains(corpus)}
+    six = {(d, f) for d, b in bodies.items() for f in fx.FIELDS
+           if b["fields"][f]["status"] == "contested"}
     screens.sign_in(page)
     page.goto("/contested")
+    if six:
+        expect(page.get_by_test_id("contested-list")).to_be_visible()
+        expect(page.locator('[data-testid^="contested-item-"]').first).to_be_visible()
+    else:
+        expect(page.get_by_test_id("empty-contested")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
     assert ex_testids(page) == []
     items = page.evaluate("""() => [...document.querySelectorAll('[data-testid^="contested-item-"]')]
