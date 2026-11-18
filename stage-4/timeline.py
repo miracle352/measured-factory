@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 
 import candidates as C
 
-FIELDS = ("legal_name", "hq_city", "ceo", "founded_year", "headcount_range", "funding_total", "executives")
+FIELDS = ("legal_name", "hq_city", "ceo", "founded_year", "headcount_range", "funding_total", "executives",
+          "investors")
 EXEC_TITLES = C.EXEC_TITLES
 
 
@@ -41,6 +42,24 @@ def _members(field_obj: dict | None) -> dict:
     return {m.get("title"): m.get("name") for m in v if isinstance(m, dict)}
 
 
+def investor_members(cands: list[dict]) -> list[str]:
+    """Pure: sorted names that are members of an investors field with these candidates."""
+    return C.investor_members(cands)
+
+
+def investor_true_froms(field_obj: dict | None) -> dict:
+    """{name: true_from} for each name of the value: earliest non-null true_from of the candidates with the name."""
+    out = {}
+    if not isinstance(field_obj, dict):
+        return out
+    v = field_obj.get("value")
+    for n in (v if isinstance(v, list) else []):
+        tfs = [c.get("true_from") for c in field_obj.get("candidates") or []
+               if c.get("value") == n and c.get("true_from") is not None]
+        out[n] = min(tfs) if tfs else None
+    return out
+
+
 def _correction_dates(new_tf, old_tf) -> bool:
     return new_tf is not None and old_tf is not None and new_tf <= old_tf
 
@@ -55,6 +74,17 @@ def classify(field: str, prev: dict | None, new: dict | None) -> str | None:
         if not differing:
             return None
         ok = all(t in a and t in b and _correction_dates(btf.get(t), atf.get(t)) for t in differing)
+        return "correction" if ok else "change"
+    if field == "investors":
+        a = set(_value(prev) or [])
+        b = set(_value(new) or [])
+        if a == b:
+            return None
+        if a - b:
+            return "change"                      # a name that left the value is never a correction
+        old_tf = (prev or {}).get("true_from")
+        tfs = investor_true_froms(new)
+        ok = all(_correction_dates(tfs.get(n), old_tf) for n in b - a)
         return "correction" if ok else "change"
     pv, nv = _value(prev), _value(new)
     if C.value_key(pv) == C.value_key(nv):
