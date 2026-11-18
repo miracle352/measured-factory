@@ -5,11 +5,14 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
+import sys
 import threading
 
 FIELD_NAMES = ["legal_name", "hq_city", "ceo", "founded_year", "headcount_range", "funding_total"]
+ALL_FIELDS = FIELD_NAMES + ["executives"]
 
 _RFC3339 = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
@@ -93,8 +96,8 @@ def verify_password(password, stored):
 
 
 def unknown_fields():
-    return {n: {"value": None, "status": "unknown", "citations": [], "candidates": []}
-            for n in FIELD_NAMES}
+    return {n: {"value": None, "status": "unknown", "true_from": None, "learned_at": None,
+                "citations": [], "candidates": []} for n in ALL_FIELDS}
 
 
 _AUTH = {"own": 0, "filing": 0, "news": 1, "aggregator": 2, None: 2}
@@ -165,30 +168,36 @@ def _clean_cite(c):
 
 
 def norm_fields(raw, researched_at=None):
-    """Fields in stage-2 shape. A field carrying `candidates` is kept as given (build result or
-    stage-2 export). A stage-1 field (citations only) gets candidates derived from its citations."""
+    """Fields in stage-3 shape. A field carrying `candidates` is kept as given (build result or
+    stage-2/3 export). A stage-1 field (citations only) gets candidates derived from its citations."""
     out = {}
     raw = raw if isinstance(raw, dict) else {}
-    for n in FIELD_NAMES:
+    for n in ALL_FIELDS:
         f = raw.get(n)
         if not isinstance(f, dict):
-            out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
+            out[n] = unknown_fields()[n]
         elif isinstance(f.get("candidates"), list):
             cs = [dict(c) for c in f["candidates"] if isinstance(c, dict)]
             if not cs:
-                out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
+                out[n] = unknown_fields()[n]
             else:
                 out[n] = {"value": f.get("value"), "status": f.get("status") or "known",
+                          "true_from": f.get("true_from"), "learned_at": f.get("learned_at"),
                           "citations": [_clean_cite(c) for c in (f.get("citations") or [])
                                         if isinstance(c, dict)],
                           "candidates": cs}
-        elif f.get("value") is not None and isinstance(f.get("citations"), list):
+        elif n != "executives" and f.get("value") is not None and isinstance(f.get("citations"), list):
             cites = [_clean_cite(c) for c in f["citations"] if isinstance(c, dict)]
             fobj = {"value": f["value"], "status": "known", "citations": cites}
             cands = _derive(n, fobj, researched_at) if cites else []
-            out[n] = _assemble(cands) if cands else dict(unknown_fields()[n])
+            if cands:
+                af = _assemble(cands)
+                out[n] = {"value": af["value"], "status": af["status"], "true_from": af.get("true_from"),
+                          "learned_at": None, "citations": af["citations"], "candidates": af["candidates"]}
+            else:
+                out[n] = unknown_fields()[n]
         else:
-            out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
+            out[n] = unknown_fields()[n]
     return out
 
 
@@ -217,14 +226,116 @@ def _res_get(res, name, default=None):
     return getattr(res, name, default)
 
 
+# ---------------------------------------------------------------- timeline helpers
+
+def _vk(v):
+    if isinstance(v, str):
+        v = v.strip()
+    if isinstance(v, float) and v == int(v):
+        v = int(v)
+    return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
+
+def _cand_key(field, c):
+    try:
+        import candidates as C
+        return tuple(C.cand_key(field, c))
+    except Exception:
+        return (field, c.get("title"), _vk(c.get("value")), c.get("url"), c.get("provider"))
+
+
+def _seen_key(field, c):
+    return json.dumps(_cand_key(field, c), ensure_ascii=False, default=str)
+
+
+def _date_of(published_at):
+    """UTC date part of an RFC 3339 timestamp, else None."""
+    if not isinstance(published_at, str):
+        return None
+    try:
+        return parse_ts(published_at).astimezone(dt.timezone.utc).date().isoformat()
+    except Exception:
+        return None
+
+
+def _import_pages(cands_by_field):
+    try:
+        import timeline
+        return timeline.import_pages(cands_by_field)
+    except Exception:
+        pass
+    pages = {}
+    for f, cs in cands_by_field.items():
+        for c in cs:
+            u = c.get("url")
+            p = pages.setdefault(u, {"url": u, "true_from": _date_of(c.get("published_at")),
+                                     "candidates": {n: [] for n in ALL_FIELDS}})
+            p["candidates"][f].append(c)
+    return list(pages.values())
+
+
+def _classify(field, prev, new):
+    try:
+        import timeline
+        return timeline.classify(field, prev, new)
+    except ImportError:
+        pass
+    if _vk(prev.get("value")) == _vk(new.get("value")):
+        return None
+    pt, nt = prev.get("true_from"), new.get("true_from")
+    if prev.get("value") is not None and new.get("value") is not None \
+            and pt is not None and nt is not None and nt <= pt:
+        return "correction"
+    return "change"
+
+
+def _field_view(f):
+    return {"value": f.get("value"), "true_from": f.get("true_from")}
+
+
+def _sel_true_from(f):
+    if "true_from" in f and f["true_from"] is not None:
+        return f["true_from"]
+    for c in f.get("candidates", []):
+        if c.get("selected"):
+            return c.get("true_from")
+    return None
+
+
+def _state_dir():
+    d = os.environ.get("DOSSIER_STATE_DIR") or "/var/lib/dossier"
+    try:
+        os.makedirs(d, exist_ok=True)
+        probe = os.path.join(d, ".probe")
+        with open(probe, "w") as fh:
+            fh.write("x")
+        os.remove(probe)
+        return d
+    except OSError:
+        d = os.path.join(os.path.expanduser("~"), ".dossier-state")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+
+def _jsonable_build_state(builds):
+    return builds
+
+
 # ---------------------------------------------------------------- store
 
 class Store:
-    def __init__(self):
+    def __init__(self, persist=True):
         self.lock = threading.RLock()
         self.clock = None  # None -> follow system time
         self.epoch = 0
         self._fresh()
+        self.path = None
+        if persist:
+            try:
+                self.path = os.path.join(_state_dir(), "state.json")
+            except OSError:
+                self.path = None
+            self._load()
 
     def _fresh(self):
         self.users = {}      # id -> {id,email,display_name,pw}
@@ -233,6 +344,53 @@ class Store:
         self.dossiers = {}   # domain -> dict
         self.idem = {}       # (uid, "METHOD path", key) -> {"body":..., "response":...}
         self.seq = 0
+        self.feed = []       # feed entries
+        self.feed_seq = 0
+
+    # ---- persistence
+    def _persist(self):
+        if not self.path:
+            return
+        with self.lock:
+            snap = self._dump()
+            snap["clock"] = self.clock.isoformat() if self.clock is not None else None
+            data = json.dumps(snap, ensure_ascii=False).encode("utf-8")
+            tmp = self.path + ".tmp"
+            try:
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, self.path)
+                try:
+                    fd = os.open(os.path.dirname(self.path), os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+            except OSError as e:
+                print("persist failed:", repr(e), file=sys.stderr)
+
+    def _load(self):
+        try:
+            with open(self.path, "rb") as fh:
+                snap = json.loads(fh.read().decode("utf-8"))
+            new = self._parse_state(snap, restore=True)
+        except Exception:
+            return
+        with self.lock:
+            (self.users, self.emails, self.tokens, self.dossiers, self.idem, self.seq,
+             self.feed, self.feed_seq) = new
+            if snap.get("clock"):
+                try:
+                    self.clock = parse_ts(snap["clock"])
+                except Exception:
+                    self.clock = None
+            for d in self.dossiers.values():
+                if d["building"]:
+                    self._start_build(d)
 
     # ---- clock
     def now(self):
@@ -253,6 +411,7 @@ class Store:
             if d < self.now():
                 raise invalid("now is earlier than the current clock")
             self.clock = d
+            self._persist()
 
     # ---- reset
     def reset(self, body):
@@ -294,6 +453,7 @@ class Store:
             self.users = users
             self.emails = email_map
             self.clock = now
+            self._persist()
 
     # ---- auth
     def signup(self, body):
@@ -328,6 +488,7 @@ class Store:
             self.emails[key] = uid
             token = secrets.token_urlsafe(32)
             self.tokens[token] = uid
+            self._persist()
         return {"user_id": uid, "display_name": name, "token": token}
 
     def login(self, body):
@@ -353,6 +514,7 @@ class Store:
                 raise ApiError(401, "unauthenticated", "invalid credentials")
             token = secrets.token_urlsafe(32)
             self.tokens[token] = uid
+            self._persist()
         return {"user_id": uid, "display_name": user["display_name"], "token": token}
 
     def authenticate(self, header):
@@ -376,6 +538,12 @@ class Store:
     def _brief(self, d):
         return {"dossier_id": d["id"], "domain": d["domain"], "state": self._public_state(d)}
 
+    def _new_dossier(self, domain):
+        self.seq += 1
+        return {"id": "d_%d" % self.seq, "domain": domain, "last_outcome": None, "building": False,
+                "fields": unknown_fields(), "researched_at": None, "spent_units": 0,
+                "base_spent": 0, "builds": [], "history": {n: [] for n in ALL_FIELDS}, "seen": {}}
+
     def _start_build(self, d):
         d["building"] = True
         epoch = self.epoch
@@ -393,20 +561,95 @@ class Store:
             if self.epoch != epoch:
                 return
             d["building"] = False
-            if res is None:
-                d["last_outcome"] = "failed"
-                return
             try:
-                spent = int(_res_get(res, "spent_units", 0) or 0)
-            except Exception:
-                spent = 0
-            d["spent_units"] += max(spent, 0)
-            if _res_get(res, "outcome") == "ready":
-                d["fields"] = norm_fields(_res_get(res, "fields"), now_iso)
-                d["researched_at"] = now_iso
-                d["last_outcome"] = "ready"
-            else:
+                self._complete(d, res, now_iso)
+            except Exception as e:
+                print("build completion failed:", repr(e), file=sys.stderr)
                 d["last_outcome"] = "failed"
+            self._persist()
+
+    def _complete(self, d, res, now_iso):
+        failed = {"time": now_iso, "outcome": "failed", "spent": 0, "fields": None,
+                  "pages": [], "researched_at": None}
+        if res is None:
+            d["last_outcome"] = "failed"
+            d["builds"].append(failed)
+            return
+        try:
+            spent = max(int(_res_get(res, "spent_units", 0) or 0), 0)
+        except Exception:
+            spent = 0
+        d["spent_units"] += spent
+        if _res_get(res, "outcome") != "ready":
+            d["last_outcome"] = "failed"
+            failed["spent"] = spent
+            d["builds"].append(failed)
+            return
+        fields = norm_fields(_res_get(res, "fields"), now_iso)
+        prev = d["fields"]
+        first_ready = not any(b["outcome"] == "ready" for b in d["builds"])
+        seen = d["seen"]
+        for n in ALL_FIELDS:
+            f = fields[n]
+            for c in f["candidates"]:
+                c["learned_at"] = seen.setdefault(_seen_key(n, c), now_iso)
+                c.setdefault("true_from", None)
+            if f["value"] is None:
+                f["true_from"] = None
+                f["learned_at"] = None
+            else:
+                f["true_from"] = _sel_true_from(f)
+                p = prev.get(n) or {}
+                keep = p.get("value") is not None and _vk(p.get("value")) == _vk(f["value"])
+                f["learned_at"] = (p.get("learned_at") if keep else None) or now_iso
+        for n in ALL_FIELDS:
+            p, f = prev.get(n) or {"value": None, "true_from": None}, fields[n]
+            if _vk(p.get("value")) == _vk(f.get("value")):
+                continue
+            hist = d["history"][n]
+            if not hist and first_ready:
+                typ = "initial" if f["value"] is not None else None
+            else:
+                typ = _classify(n, p, f) or "change"
+            if typ is None:
+                continue
+            hist.append(self._hist_entry(typ, f))
+            if typ != "initial":
+                self.feed_seq += 1
+                self.feed.append({"seq": self.feed_seq, "domain": d["domain"], "field": n,
+                                  "type": typ, "from": copy.deepcopy(p.get("value")),
+                                  "to": copy.deepcopy(f.get("value")), "true_from": f.get("true_from"),
+                                  "learned_at": now_iso})
+        d["fields"] = fields
+        d["researched_at"] = now_iso
+        d["last_outcome"] = "ready"
+        d["builds"].append({"time": now_iso, "outcome": "ready", "spent": spent,
+                            "fields": copy.deepcopy(fields), "researched_at": now_iso,
+                            "pages": self._pages(fields, _res_get(res, "pages"))})
+
+    @staticmethod
+    def _hist_entry(typ, f):
+        has = f.get("value") is not None
+        return {"type": typ, "value": copy.deepcopy(f.get("value")),
+                "true_from": f.get("true_from") if has else None,
+                "learned_at": f.get("learned_at") if has else None,
+                "citations": copy.deepcopy(f.get("citations") or []) if has else []}
+
+    @staticmethod
+    def _pages(fields, result_pages):
+        pages = {}
+
+        def page(url, tf):
+            if url not in pages:
+                pages[url] = {"url": url, "true_from": tf, "candidates": {n: [] for n in ALL_FIELDS}}
+            return pages[url]
+        for p in (result_pages or []):
+            if isinstance(p, dict) and isinstance(p.get("url"), str):
+                page(p["url"], p.get("true_from"))
+        for n in ALL_FIELDS:
+            for c in fields[n]["candidates"]:
+                page(c.get("url"), c.get("true_from"))["candidates"][n].append(copy.deepcopy(c))
+        return list(pages.values())
 
     def idem_write(self, uid, method, path, key, body_cmp, fn):
         """Run fn() -> (status, response) once per (user, method+path, key)."""
@@ -420,6 +663,7 @@ class Store:
             status, response = fn()
             if 200 <= status < 300:
                 self.idem[k] = {"body": body_cmp, "response": copy.deepcopy(response)}
+                self._persist()
             return status, response
 
     def post_dossier(self, uid, key, path, body):
@@ -435,9 +679,7 @@ class Store:
             d = self.dossiers.get(domain)
             if d is not None:
                 return 200, self._brief(d)
-            self.seq += 1
-            d = {"id": "d_%d" % self.seq, "domain": domain, "last_outcome": None, "building": False,
-                 "fields": unknown_fields(), "researched_at": None, "spent_units": 0}
+            d = self._new_dossier(domain)
             self.dossiers[domain] = d
             self._start_build(d)
             return 202, self._brief(d)
@@ -461,13 +703,73 @@ class Store:
                 "researched_at": d["researched_at"], "spent_units": d["spent_units"],
                 "fields": d["fields"]}
 
-    def get_dossier(self, raw_domain):
+    def _find(self, raw_domain):
+        domain = normalise_domain(raw_domain)
+        d = self.dossiers.get(domain)
+        if d is None:
+            raise ApiError(404, "not_found", "no such dossier")
+        return d
+
+    def get_dossier(self, raw_domain, as_of=None):
+        asd = parse_ts(as_of) if as_of is not None else None
         domain = normalise_domain(raw_domain)
         with self.lock:
             d = self.dossiers.get(domain)
             if d is None:
                 raise ApiError(404, "not_found", "no such dossier")
-            return copy.deepcopy(self._full(d))
+            if asd is None:
+                return copy.deepcopy(self._full(d))
+            b = self._build_at(d, asd)
+            if b is None:
+                raise ApiError(404, "not_found", "no build at that time")
+            spent = d["base_spent"] + sum(x["spent"] for x in d["builds"]
+                                          if parse_ts(x["time"]) <= asd)
+            return copy.deepcopy({"dossier_id": d["id"], "domain": d["domain"], "state": "ready",
+                                  "researched_at": b["researched_at"], "spent_units": spent,
+                                  "fields": b["fields"]})
+
+    @staticmethod
+    def _build_at(d, asd):
+        best, best_key = None, None
+        for i, b in enumerate(d["builds"]):
+            if b["outcome"] != "ready":
+                continue
+            t = parse_ts(b["time"])
+            if t > asd:
+                continue
+            k = (t, i)
+            if best_key is None or k >= best_key:
+                best, best_key = b, k
+        return best
+
+    def values(self, raw_domain, true_at, as_of):
+        with self.lock:
+            d = self._find(raw_domain)
+            asd = parse_ts(as_of) if as_of is not None else self.now()
+            if self._build_at(d, asd) is None:
+                raise ApiError(404, "not_found", "no build at that time")
+            builds = [{"time": b["time"], "outcome": b["outcome"], "pages": b["pages"]}
+                      for b in d["builds"]]
+            as_of_iso = as_of if as_of is not None else self.now_iso()
+            import timeline
+            got = timeline.values_at(copy.deepcopy(builds), true_at, as_of_iso)
+            fields = {}
+            for n in ALL_FIELDS:
+                g = got.get(n) or {}
+                fields[n] = {"value": g.get("value"), "true_from": g.get("true_from"),
+                             "citations": g.get("citations") or []}
+            return {"domain": d["domain"], "true_at": true_at, "as_of": as_of_iso, "fields": fields}
+
+    def history(self, raw_domain):
+        with self.lock:
+            d = self._find(raw_domain)
+            return {"domain": d["domain"],
+                    "fields": {n: copy.deepcopy(d["history"].get(n, [])) for n in ALL_FIELDS}}
+
+    def changes(self, since, limit):
+        with self.lock:
+            items = [e for e in self.feed if e["seq"] > since]
+            return {"changes": copy.deepcopy(items[:limit]), "has_more": len(items) > limit}
 
     def list_dossiers(self, q, limit, offset):
         ql = q.lower()
@@ -486,22 +788,31 @@ class Store:
         return {"dossiers": page, "has_more": offset + limit < len(items)}
 
     # ---- export / import
-    def export(self):
+    def _dump(self):
         with self.lock:
             dossiers = []
             for d in self.dossiers.values():
                 dossiers.append({"id": d["id"], "domain": d["domain"],
                                  "state": d["last_outcome"] or "failed",
+                                 "building": bool(d["building"]),
                                  "fields": d["fields"], "researched_at": d["researched_at"],
-                                 "spent_units": d["spent_units"]})
+                                 "spent_units": d["spent_units"], "base_spent": d["base_spent"],
+                                 "builds": d["builds"], "history": d["history"], "seen": d["seen"]})
             state = {
                 "users": list(self.users.values()),
                 "tokens": dict(self.tokens),
                 "dossiers": dossiers,
                 "idem": [[k[0], k[1], k[2], v["body"], v["response"]] for k, v in self.idem.items()],
                 "seq": self.seq,
+                "feed": self.feed,
+                "feed_seq": self.feed_seq,
             }
-            state = copy.deepcopy(state)
+            return copy.deepcopy(state)
+
+    def export(self):
+        state = self._dump()
+        for d in state["dossiers"]:
+            d.pop("building", None)
         return {"track": "dossier", "format_version": 1, "state": state}
 
     def import_state(self, obj):
@@ -518,9 +829,11 @@ class Store:
             raise invalid("invalid state")
         with self.lock:
             self.epoch += 1
-            self.users, self.emails, self.tokens, self.dossiers, self.idem, self.seq = new
+            (self.users, self.emails, self.tokens, self.dossiers, self.idem, self.seq,
+             self.feed, self.feed_seq) = new
+            self._persist()
 
-    def _parse_state(self, st):
+    def _parse_state(self, st, restore=False):
         users, emails = {}, {}
         for u in st["users"]:
             rec = {k: u[k] for k in ("id", "email", "display_name", "pw")}
@@ -550,9 +863,9 @@ class Store:
                 raise invalid("bad spent")
             if not isinstance(d["fields"], dict):
                 raise invalid("bad fields")
-            dossiers[domain] = {"id": d["id"], "domain": domain, "last_outcome": d["state"],
-                                "building": False, "fields": norm_fields(d["fields"], d["researched_at"]),
-                                "researched_at": d["researched_at"], "spent_units": spent}
+            dossiers[domain] = self._import_dossier(d, domain, spent)
+            if restore and d.get("building"):
+                dossiers[domain]["building"] = True
         idem = {}
         for item in st["idem"]:
             uid, mp, key, body, resp = item
@@ -562,4 +875,88 @@ class Store:
         seq = st["seq"]
         if not isinstance(seq, int) or isinstance(seq, bool):
             raise invalid("bad seq")
-        return users, emails, tokens, dossiers, idem, seq
+        feed, feed_seq = [], 0
+        if isinstance(st.get("feed"), list):
+            for e in st["feed"]:
+                feed.append({k: e[k] for k in ("seq", "domain", "field", "type", "from", "to",
+                                               "true_from", "learned_at")})
+            feed_seq = max([e["seq"] for e in feed] + [int(st.get("feed_seq") or 0)])
+        return users, emails, tokens, dossiers, idem, seq, feed, feed_seq
+
+    def _import_dossier(self, d, domain, spent):
+        ra = d["researched_at"]
+        out = {"id": d["id"], "domain": domain, "last_outcome": d["state"], "building": False,
+               "researched_at": ra, "spent_units": spent, "base_spent": 0, "builds": [],
+               "history": {n: [] for n in ALL_FIELDS}, "seen": {}}
+        if isinstance(d.get("builds"), list) and isinstance(d.get("history"), dict) \
+                and isinstance(d.get("seen"), dict):
+            # stage-3 state: restore as it was
+            out["fields"] = norm_fields(d["fields"], ra)
+            out["base_spent"] = int(d.get("base_spent") or 0)
+            out["builds"] = d["builds"]
+            out["history"] = {n: list(d["history"].get(n) or []) for n in ALL_FIELDS}
+            out["seen"] = d["seen"]
+            return out
+        fields = norm_fields(d["fields"], ra)
+        for n in ALL_FIELDS:
+            f = fields[n]
+            for c in f["candidates"]:
+                c["true_from"] = _date_of(c.get("published_at"))
+                c["learned_at"] = c.get("retrieved_at") or ra
+                out["seen"][_seen_key(n, c)] = c["learned_at"]
+            if f["value"] is None:
+                f["true_from"], f["learned_at"] = None, None
+            else:
+                f["true_from"] = _sel_true_from(f)
+                f["learned_at"] = ra
+                out["history"][n].append(self._hist_entry("initial", f))
+        out["fields"] = fields
+        foreign = d.get("builds")
+        if isinstance(foreign, list) and foreign:
+            for b in foreign:
+                if not isinstance(b, dict):
+                    continue
+                t = b.get("time") or b.get("started_at") or b.get("at")
+                if not isinstance(t, str):
+                    continue
+                parse_ts(t)
+                oc = "ready" if b.get("outcome") == "ready" else "failed"
+                try:
+                    sp = max(int(b.get("spent_units", b.get("spent", 0)) or 0), 0)
+                except Exception:
+                    sp = 0
+                rec = {"time": t, "outcome": oc, "spent": sp, "fields": None, "pages": [],
+                       "researched_at": None}
+                if oc == "ready":
+                    bf = norm_fields(b.get("fields") if b.get("fields") is not None else d["fields"], t)
+                    cbf = {}
+                    for n in ALL_FIELDS:
+                        f = bf[n]
+                        for c in f["candidates"]:
+                            c["true_from"] = _date_of(c.get("published_at"))
+                            c.setdefault("learned_at", c.get("retrieved_at") or t)
+                            out["seen"].setdefault(_seen_key(n, c), c["learned_at"])
+                        cbf[n] = f["candidates"]
+                        if f["value"] is None:
+                            f["true_from"], f["learned_at"] = None, None
+                        else:
+                            f["true_from"] = _sel_true_from(f)
+                            f["learned_at"] = ra or t
+                            for h in out["history"][n]:
+                                if _vk(h["value"]) == _vk(f["value"]):
+                                    f["true_from"], f["learned_at"] = h["true_from"], h["learned_at"]
+                                    break
+                    rec["fields"] = bf
+                    rec["researched_at"] = t
+                    rec["pages"] = _import_pages(cbf)
+                out["builds"].append(rec)
+            if out["builds"]:
+                return out
+        if ra is not None:
+            cbf = {n: fields[n]["candidates"] for n in ALL_FIELDS}
+            out["builds"].append({"time": ra, "outcome": "ready", "spent": spent,
+                                  "fields": copy.deepcopy(fields), "researched_at": ra,
+                                  "pages": _import_pages(copy.deepcopy(cbf))})
+        else:
+            out["base_spent"] = spent
+        return out
