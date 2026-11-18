@@ -76,3 +76,14 @@ Interfaces:
 | R-57 | Imported dossier candidates replaced by those of its next completed build | B | P | W-14 | open |
 | R-58 | Stage-2 export still opaque round trip: stage-2 service export (with candidates) imports unchanged; repeat import restores state | B | S,P | W-14 | open |
 | R-59 | General: all stage-1 requirements still hold (supplied stage-1 check passes); stage-1 `status` values known/unknown still valid shapes | A+B | S | W-6 | open |
+| R-60 | (exam F-79) field `citations` = every candidate with the selected value, no cap of 3 (overrides stage-1 cap-3 ruling) | A | P | W-3b | open |
+| R-61 | (exam F-76) equal `published_at` means equal instants (`Z` vs `+00:00` vs offsets) | A | P | W-3 | open |
+| R-62 | (exam F-44,F-45) builds meeting 429s end `ready` with the data (failed only when no provider call succeeds); API never 5xx because of 429 | A | P | W-5 | open |
+| R-63 | (exam F-104) HTML routes load no runtime assets from the internet | B | P | W-9 | open |
+| R-64 | (exam F-106) signed-out browser on `/`, dossier, evidence, contested: handled (redirect/prompt to login), no crash; `/signup` and `/login` reachable signed out | B | P | W-9 | open |
+| R-65 | (exam F-154) evidence screen for a domain with no dossier shows a not-found state, no crash | A | P | W-13 | open |
+| R-66 | (exam F-163) contested screen reads all dossiers (pages beyond the first list page) | A | P | W-13 | open |
+| R-67 | (exam F-153) imported candidates: null kind / null published_at shown without literal "null"/"None"; data-kind empty, data-published-at empty | A | P | W-13 | open |
+| R-68 | (exam F-13) Kind/Published read from header lines only, never from prose | A | P | W-1 | open |
+| R-69 | (exam F-62) a page found by both search and research citation yields one candidate per (page,value), not duplicates | A | P | W-2 | open |
+| R-70 | (exam F-60) a dossier before its first ready build: every field `candidates: []`, unknown | B | P | W-6 | open |
