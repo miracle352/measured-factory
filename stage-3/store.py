@@ -941,7 +941,7 @@ class Store:
                             f["true_from"], f["learned_at"] = None, None
                         else:
                             f["true_from"] = _sel_true_from(f)
-                            f["learned_at"] = ra or t
+                            f["learned_at"] = t
                             for h in out["history"][n]:
                                 if _vk(h["value"]) == _vk(f["value"]):
                                     f["true_from"], f["learned_at"] = h["true_from"], h["learned_at"]
