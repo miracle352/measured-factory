@@ -10,9 +10,13 @@ import re
 import secrets
 import sys
 import threading
+import time
 
 FIELD_NAMES = ["legal_name", "hq_city", "ceo", "founded_year", "headcount_range", "funding_total"]
-ALL_FIELDS = FIELD_NAMES + ["executives"]
+ALL_FIELDS = FIELD_NAMES + ["executives", "investors"]
+BUILD_CAP = 80
+RESUME_DEADLINE = 9.0
+from urllib.parse import urlsplit
 
 _RFC3339 = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
@@ -97,7 +101,121 @@ def verify_password(password, stored):
 
 def unknown_fields():
     return {n: {"value": None, "status": "unknown", "true_from": None, "learned_at": None,
-                "citations": [], "candidates": []} for n in ALL_FIELDS}
+                "citations": [], "candidates": [], "origins": [], "corroborated": False,
+                "corroborated_since": None} for n in ALL_FIELDS}
+
+
+# ---------------------------------------------------------------- origins
+
+def host_origin(url):
+    """Normalised host of a URL (the origin of an imported candidate that records none)."""
+    try:
+        h = urlsplit(url).hostname if isinstance(url, str) else None
+    except ValueError:
+        h = None
+    if not h:
+        return ""
+    try:
+        return normalise_domain(h)
+    except ApiError:
+        return h.lower()
+
+
+def _member_cands(name, f):
+    """For executives/investors: list of (member key, [candidates of that member]); else None."""
+    if name not in ("executives", "investors"):
+        return None
+    out = []
+    val = f.get("value")
+    if not isinstance(val, list):
+        return out
+    cands = f.get("candidates") or []
+    for m in val:
+        if name == "executives":
+            if not isinstance(m, dict):
+                continue
+            key = ("e", m.get("title"), _vk(m.get("name")))
+            mine = [c for c in cands if c.get("title") == m.get("title")
+                    and _vk(c.get("value")) == _vk(m.get("name"))]
+        else:
+            key = ("i", _vk(m))
+            mine = [c for c in cands if _vk(c.get("value")) == _vk(m)]
+        out.append((key, mine))
+    return out
+
+
+def _origins_of(cs):
+    return {c.get("origin") for c in cs if c.get("origin")}
+
+
+def field_keys(name, f):
+    """(origins, corroborated) of a field."""
+    if f.get("value") is None:
+        return [], False
+    mem = _member_cands(name, f)
+    if mem is None:
+        cs = [c for c in f.get("candidates") or [] if _vk(c.get("value")) == _vk(f["value"])]
+        o = sorted(_origins_of(cs))
+        return o, len(o) >= 2
+    allo = set()
+    ok = bool(mem)
+    for _, cs in mem:
+        o = _origins_of(cs)
+        allo |= o
+        if len(o) < 2:
+            ok = False
+    return sorted(allo), ok
+
+
+def _standing_ok(name, seq):
+    """seq: field dicts of ready builds, oldest first; is the last one corroborated by standing origins."""
+    last = seq[-1]
+    if last.get("value") is None:
+        return False
+    mem = _member_cands(name, last)
+    if mem is None:
+        o = set()
+        for f in reversed(seq):
+            if f.get("value") is None or _vk(f["value"]) != _vk(last["value"]):
+                break
+            o |= _origins_of([c for c in f.get("candidates") or []
+                              if _vk(c.get("value")) == _vk(last["value"])])
+        return len(o) >= 2
+    if not mem:
+        return False
+    for key, _ in mem:
+        o = set()
+        for f in reversed(seq):
+            m = dict(_member_cands(name, f) or [])
+            if key not in m:
+                break
+            o |= _origins_of(m[key])
+        if len(o) < 2:
+            return False
+    return True
+
+
+def corroborated_since(name, timed):
+    """timed: [(time_iso, fields dict)] of ready builds, oldest first (failed builds excluded)."""
+    fl = [f[name] for _, f in timed]
+    if not fl or not _standing_ok(name, fl):
+        return None
+    k = len(fl) - 1
+    while k > 0 and _standing_ok(name, fl[:k]):
+        k -= 1
+    return timed[k][0]
+
+
+def stamp_keys(fields):
+    for n in ALL_FIELDS:
+        f = fields[n]
+        for c in f.get("candidates") or []:
+            if not c.get("origin"):
+                c["origin"] = host_origin(c.get("url"))
+        f["origins"], f["corroborated"] = field_keys(n, f)
+        f.setdefault("corroborated_since", None)
+        if f["value"] is None:
+            f["corroborated_since"] = None
 
 
 _AUTH = {"own": 0, "filing": 0, "news": 1, "aggregator": 2, None: 2}
@@ -185,7 +303,8 @@ def norm_fields(raw, researched_at=None):
                           "true_from": f.get("true_from"), "learned_at": f.get("learned_at"),
                           "citations": [_clean_cite(c) for c in (f.get("citations") or [])
                                         if isinstance(c, dict)],
-                          "candidates": cs}
+                          "candidates": cs,
+                          "corroborated_since": f.get("corroborated_since")}
         elif n != "executives" and f.get("value") is not None and isinstance(f.get("citations"), list):
             cites = [_clean_cite(c) for c in f["citations"] if isinstance(c, dict)]
             fobj = {"value": f["value"], "status": "known", "citations": cites}
@@ -198,6 +317,7 @@ def norm_fields(raw, researched_at=None):
                 out[n] = unknown_fields()[n]
         else:
             out[n] = unknown_fields()[n]
+    stamp_keys(out)
     return out
 
 
@@ -215,9 +335,60 @@ except Exception:  # stub until build.py lands
             self.fields = fields
             self.spent_units = spent_units
 
-    def _run_build(domain, now_iso, should_abort):
+    def _run_build(domain, now_iso, should_abort, budget=None):
         _time.sleep(0.2)
         return _Result("ready", unknown_fields(), 0)
+
+
+try:
+    import inspect as _inspect
+    _TAKES_BUDGET = "budget" in _inspect.signature(_run_build).parameters
+except Exception:
+    _TAKES_BUDGET = False
+
+
+class BuildBudget:
+    """One build's view of its budget: the per-build cap (kept across restarts) and, for a batch's
+    build, the batch's shared budget. reserve() before a call, settle() after it."""
+
+    def __init__(self, store, d, batch, epoch):
+        self.store, self.d, self.batch, self.epoch = store, d, batch, epoch
+        self.spent = int(d.get("cur_spent") or 0)
+        self.reserved = 0
+        self.refused = False
+
+    def reserve(self, n):
+        n = int(n)
+        with self.store.lock:
+            if n <= 0:
+                return True
+            if self.store.epoch != self.epoch:
+                return False
+            b = self.batch
+            if self.spent + self.reserved + n > BUILD_CAP or (
+                    b is not None and b["spent"] + b["reserved"] + n > b["limit"]):
+                self.refused = True
+                return False
+            self.reserved += n
+            if b is not None:
+                b["reserved"] += n
+            return True
+
+    def settle(self, reserved, actual):
+        reserved, actual = max(int(reserved), 0), max(int(actual), 0)
+        with self.store.lock:
+            if self.store.epoch != self.epoch:
+                return
+            self.reserved = max(self.reserved - reserved, 0)
+            actual = min(actual, reserved, BUILD_CAP - self.spent)
+            self.spent += actual
+            self.d["cur_spent"] = self.spent
+            b = self.batch
+            if b is not None:
+                b["reserved"] = max(b["reserved"] - reserved, 0)
+                b["spent"] += actual
+            if actual:
+                self.store._persist()
 
 
 def _res_get(res, name, default=None):
@@ -346,6 +517,8 @@ class Store:
         self.seq = 0
         self.feed = []       # feed entries
         self.feed_seq = 0
+        self.batches = {}    # id -> batch dict
+        self.bseq = 0
 
     # ---- persistence
     def _persist(self):
@@ -382,7 +555,7 @@ class Store:
             return
         with self.lock:
             (self.users, self.emails, self.tokens, self.dossiers, self.idem, self.seq,
-             self.feed, self.feed_seq) = new
+             self.feed, self.feed_seq, self.batches, self.bseq) = new
             if snap.get("clock"):
                 try:
                     self.clock = parse_ts(snap["clock"])
@@ -390,7 +563,7 @@ class Store:
                     self.clock = None
             for d in self.dossiers.values():
                 if d["building"]:
-                    self._start_build(d)
+                    self._start_build(d, d.get("build_batch"), resumed=True)
 
     # ---- clock
     def now(self):
@@ -542,19 +715,33 @@ class Store:
         self.seq += 1
         return {"id": "d_%d" % self.seq, "domain": domain, "last_outcome": None, "building": False,
                 "fields": unknown_fields(), "researched_at": None, "spent_units": 0,
-                "base_spent": 0, "builds": [], "history": {n: [] for n in ALL_FIELDS}, "seen": {}}
+                "base_spent": 0, "builds": [], "history": {n: [] for n in ALL_FIELDS}, "seen": {},
+                "cur_spent": 0, "build_batch": None}
 
-    def _start_build(self, d):
+    def _start_build(self, d, batch_id=None, resumed=False):
         d["building"] = True
+        if not resumed:
+            d["cur_spent"] = 0
+            d["build_batch"] = batch_id
         epoch = self.epoch
         now_iso = self.now_iso()
-        threading.Thread(target=self._run, args=(d, epoch, now_iso), daemon=True).start()
+        batch = self.batches.get(d.get("build_batch"))
+        budget = BuildBudget(self, d, batch, epoch)
+        threading.Thread(target=self._run, args=(d, epoch, now_iso, budget, resumed),
+                         daemon=True).start()
 
-    def _run(self, d, epoch, now_iso):
+    def _run(self, d, epoch, now_iso, budget, resumed=False):
+        t0 = time.monotonic()
+
         def should_abort():
-            return self.epoch != epoch
+            if self.epoch != epoch:
+                return True
+            return resumed and time.monotonic() - t0 > RESUME_DEADLINE
         try:
-            res = _run_build(d["domain"], now_iso, should_abort)
+            if _TAKES_BUDGET:
+                res = _run_build(d["domain"], now_iso, should_abort, budget=budget)
+            else:
+                res = _run_build(d["domain"], now_iso, should_abort)
         except BaseException:
             res = None
         with self.lock:
@@ -562,27 +749,36 @@ class Store:
                 return
             d["building"] = False
             try:
-                self._complete(d, res, now_iso)
+                if resumed and budget.refused and _res_get(res, "outcome") == "ready":
+                    res = None  # a build cut short by its budget after a restart leaves fields as they were
+                self._complete(d, res, now_iso, budget)
             except Exception as e:
                 print("build completion failed:", repr(e), file=sys.stderr)
                 d["last_outcome"] = "failed"
+            d["cur_spent"] = 0
             self._persist()
 
-    def _complete(self, d, res, now_iso):
+    def _complete(self, d, res, now_iso, budget=None):
         failed = {"time": now_iso, "outcome": "failed", "spent": 0, "fields": None,
                   "pages": [], "researched_at": None}
+        try:
+            spent = max(int(_res_get(res, "spent_units", 0) or 0), 0) if res is not None else 0
+        except Exception:
+            spent = 0
+        if budget is not None:
+            extra = spent - budget.spent
+            if extra > 0 and budget.batch is not None:  # spend the build reports but did not settle
+                b = budget.batch
+                b["spent"] += max(min(extra, b["limit"] - b["spent"]), 0)
+            spent = max(spent, budget.spent)
+        d["spent_units"] += spent
+        failed["spent"] = spent
         if res is None:
             d["last_outcome"] = "failed"
             d["builds"].append(failed)
             return
-        try:
-            spent = max(int(_res_get(res, "spent_units", 0) or 0), 0)
-        except Exception:
-            spent = 0
-        d["spent_units"] += spent
         if _res_get(res, "outcome") != "ready":
             d["last_outcome"] = "failed"
-            failed["spent"] = spent
             d["builds"].append(failed)
             return
         fields = norm_fields(_res_get(res, "fields"), now_iso)
@@ -598,7 +794,7 @@ class Store:
                 f["true_from"] = None
                 f["learned_at"] = None
             else:
-                f["true_from"] = _sel_true_from(f)
+                f["true_from"] = f.get("true_from") if n == "investors" else _sel_true_from(f)
                 p = prev.get(n) or {}
                 keep = p.get("value") is not None and _vk(p.get("value")) == _vk(f["value"])
                 f["learned_at"] = (p.get("learned_at") if keep else None) or now_iso
@@ -620,6 +816,10 @@ class Store:
                                   "type": typ, "from": copy.deepcopy(p.get("value")),
                                   "to": copy.deepcopy(f.get("value")), "true_from": f.get("true_from"),
                                   "learned_at": now_iso})
+        timed = [(b["time"], b["fields"]) for b in d["builds"]
+                 if b["outcome"] == "ready" and b.get("fields")] + [(now_iso, fields)]
+        for n in ALL_FIELDS:
+            fields[n]["corroborated_since"] = corroborated_since(n, timed)
         d["fields"] = fields
         d["researched_at"] = now_iso
         d["last_outcome"] = "ready"
@@ -697,6 +897,59 @@ class Store:
             return 202, self._brief(d)
 
         return self.idem_write(uid, "POST", path, key, None, fn)
+
+    # ---- batches
+    def _batch_view(self, b):
+        running = any(self.dossiers.get(dm) is not None and self.dossiers[dm]["building"]
+                      and self.dossiers[dm].get("build_batch") == b["id"] for dm in b["started"])
+        return {"batch_id": b["id"], "state": "running" if running else "done",
+                "budget_units": b["limit"], "spent_units": b["spent"],
+                "dossiers": [{"domain": dm, "state": self._public_state(self.dossiers[dm])
+                              if dm in self.dossiers else "failed"} for dm in b["domains"]]}
+
+    def post_batch(self, uid, key, path, body):
+        def fn():
+            doms = body.get("domains")
+            if doms is None:
+                raise invalid("domains is required")
+            if not isinstance(doms, list):
+                raise malformed("domains must be a list")
+            if len(doms) == 0 or len(doms) > 50:
+                raise invalid("domains must hold 1 to 50 entries")
+            norm = []
+            for x in doms:
+                if not isinstance(x, str):
+                    raise malformed("domain must be a string")
+                norm.append(normalise_domain(x))
+            if len(set(norm)) != len(norm):
+                raise invalid("duplicate domains")
+            bu = body.get("budget_units")
+            if isinstance(bu, float) and abs(bu) < 1e15 and bu == int(bu):
+                bu = int(bu)
+            if bu is None or isinstance(bu, bool) or not isinstance(bu, int) \
+                    or bu < 1 or bu > 100000:
+                raise invalid("budget_units must be an integer from 1 to 100000")
+            self.bseq += 1
+            b = {"id": "b_%d" % self.bseq, "uid": uid, "limit": bu, "spent": 0, "reserved": 0,
+                 "domains": norm, "started": []}
+            self.batches[b["id"]] = b
+            for dm in norm:
+                if dm in self.dossiers:
+                    continue
+                d = self._new_dossier(dm)
+                self.dossiers[dm] = d
+                b["started"].append(dm)
+                self._start_build(d, b["id"])
+            return 202, self._batch_view(b)
+
+        return self.idem_write(uid, "POST", path, key, body, fn)
+
+    def get_batch(self, uid, bid):
+        with self.lock:
+            b = self.batches.get(bid)
+            if b is None or b["uid"] != uid:
+                raise ApiError(404, "not_found", "no such batch")
+            return copy.deepcopy(self._batch_view(b))
 
     def _full(self, d):
         return {"dossier_id": d["id"], "domain": d["domain"], "state": self._public_state(d),
@@ -797,7 +1050,9 @@ class Store:
                                  "building": bool(d["building"]),
                                  "fields": d["fields"], "researched_at": d["researched_at"],
                                  "spent_units": d["spent_units"], "base_spent": d["base_spent"],
-                                 "builds": d["builds"], "history": d["history"], "seen": d["seen"]})
+                                 "builds": d["builds"], "history": d["history"], "seen": d["seen"],
+                                 "cur_spent": d.get("cur_spent", 0),
+                                 "build_batch": d.get("build_batch")})
             state = {
                 "users": list(self.users.values()),
                 "tokens": dict(self.tokens),
@@ -806,6 +1061,9 @@ class Store:
                 "seq": self.seq,
                 "feed": self.feed,
                 "feed_seq": self.feed_seq,
+                "batches": [{k: b[k] for k in ("id", "uid", "limit", "spent", "domains", "started")}
+                            for b in self.batches.values()],
+                "bseq": self.bseq,
             }
             return copy.deepcopy(state)
 
@@ -813,6 +1071,7 @@ class Store:
         state = self._dump()
         for d in state["dossiers"]:
             d.pop("building", None)
+            d["cur_spent"], d["build_batch"] = 0, None
         return {"track": "dossier", "format_version": 1, "state": state}
 
     def import_state(self, obj):
@@ -829,8 +1088,10 @@ class Store:
             raise invalid("invalid state")
         with self.lock:
             self.epoch += 1
+            keep = self.bseq
             (self.users, self.emails, self.tokens, self.dossiers, self.idem, self.seq,
-             self.feed, self.feed_seq) = new
+             self.feed, self.feed_seq, self.batches, self.bseq) = new
+            self.bseq = max(self.bseq, keep)
             self._persist()
 
     def _parse_state(self, st, restore=False):
@@ -864,8 +1125,12 @@ class Store:
             if not isinstance(d["fields"], dict):
                 raise invalid("bad fields")
             dossiers[domain] = self._import_dossier(d, domain, spent)
+            if not restore:
+                self._restamp(dossiers[domain])
             if restore and d.get("building"):
                 dossiers[domain]["building"] = True
+                dossiers[domain]["cur_spent"] = int(d.get("cur_spent") or 0)
+                dossiers[domain]["build_batch"] = d.get("build_batch")
         idem = {}
         for item in st["idem"]:
             uid, mp, key, body, resp = item
@@ -881,19 +1146,72 @@ class Store:
                 feed.append({k: e[k] for k in ("seq", "domain", "field", "type", "from", "to",
                                                "true_from", "learned_at")})
             feed_seq = max([e["seq"] for e in feed] + [int(st.get("feed_seq") or 0)])
-        return users, emails, tokens, dossiers, idem, seq, feed, feed_seq
+        batches, bseq = {}, 0
+        for b in (st.get("batches") or []):
+            rec = {"id": b["id"], "uid": b["uid"], "limit": b["limit"], "spent": b["spent"],
+                   "reserved": 0, "domains": list(b["domains"]), "started": list(b["started"])}
+            if not isinstance(rec["id"], str) or not isinstance(rec["limit"], int) \
+                    or not isinstance(rec["spent"], int):
+                raise invalid("bad batch")
+            batches[rec["id"]] = rec
+            m = re.fullmatch(r"b_(\d+)", rec["id"])
+            if m:
+                bseq = max(bseq, int(m.group(1)))
+        if isinstance(st.get("bseq"), int) and not isinstance(st.get("bseq"), bool):
+            bseq = max(bseq, st["bseq"])
+        for d in dossiers.values():
+            if d.get("building") and d.get("build_batch") not in batches:
+                d["build_batch"] = None
+        return users, emails, tokens, dossiers, idem, seq, feed, feed_seq, batches, bseq
+
+    @staticmethod
+    def _norm_pages(pages):
+        out = []
+        for p in (pages or []):
+            if not isinstance(p, dict):
+                continue
+            p = dict(p)
+            cm = {n: [dict(c) for c in ((p.get("candidates") or {}).get(n) or [])] for n in ALL_FIELDS}
+            for cs in cm.values():
+                for c in cs:
+                    if not c.get("origin"):
+                        c["origin"] = host_origin(c.get("url"))
+            p["candidates"] = cm
+            out.append(p)
+        return out
+
+    def _restamp(self, d):
+        """After an import: origin keys and corroborated_since for the current fields and each build."""
+        timed = []
+        for b in d["builds"]:
+            if b["outcome"] != "ready" or not b.get("fields"):
+                continue
+            b["pages"] = self._norm_pages(b.get("pages"))
+            stamp_keys(b["fields"])
+            timed.append((b["time"], b["fields"]))
+            for n in ALL_FIELDS:
+                b["fields"][n]["corroborated_since"] = corroborated_since(n, timed)
+        stamp_keys(d["fields"])
+        for n in ALL_FIELDS:
+            d["fields"][n]["corroborated_since"] = timed[-1][1][n]["corroborated_since"] if timed else None
 
     def _import_dossier(self, d, domain, spent):
         ra = d["researched_at"]
         out = {"id": d["id"], "domain": domain, "last_outcome": d["state"], "building": False,
                "researched_at": ra, "spent_units": spent, "base_spent": 0, "builds": [],
-               "history": {n: [] for n in ALL_FIELDS}, "seen": {}}
+               "history": {n: [] for n in ALL_FIELDS}, "seen": {},
+               "cur_spent": 0, "build_batch": None}
         if isinstance(d.get("builds"), list) and isinstance(d.get("history"), dict) \
                 and isinstance(d.get("seen"), dict):
             # stage-3 state: restore as it was
             out["fields"] = norm_fields(d["fields"], ra)
             out["base_spent"] = int(d.get("base_spent") or 0)
-            out["builds"] = d["builds"]
+            out["builds"] = []
+            for b in d["builds"]:
+                b = dict(b)
+                if b.get("outcome") == "ready" and isinstance(b.get("fields"), dict):
+                    b["fields"] = norm_fields(b["fields"], b.get("time"))
+                out["builds"].append(b)
             out["history"] = {n: list(d["history"].get(n) or []) for n in ALL_FIELDS}
             out["seen"] = d["seen"]
             return out
