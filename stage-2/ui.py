@@ -145,7 +145,8 @@ var DX=(function(){
   }
   function fmtTime(iso){
     if(!iso)return "";var d=new Date(iso);if(isNaN(d.getTime()))return String(iso);
-    try{return d.toLocaleString("en-GB",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",timeZone:"UTC",hour12:false})+" UTC";}catch(e){return d.toISOString();}
+    function p(n){return (n<10?"0":"")+n;}
+    return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+p(d.getUTCHours())+":"+p(d.getUTCMinutes())+" UTC";
   }
   function fmtMoney(n){return typeof n==="number"?"$"+n.toLocaleString("en-US"):String(n);}
   function fmtValue(field,v){
@@ -294,8 +295,10 @@ def contested_page():
 
 
 def list_page():
-    return render_page("Dossiers", "<p>loading</p>", "", active="list")
+    import ui_pages
+    return ui_pages.list_page()
 
 
 def dossier_page(domain):
-    return render_page(domain, "<p>loading</p>", "")
+    import ui_pages
+    return ui_pages.dossier_page(domain)
