@@ -12,3 +12,11 @@ docker build -t dossier-service . && docker run --rm -p 8080:8080 -e PORT=8080 \
 Health check: `GET /health`. All provider traffic goes through the `webrouter` Python package
 (installed at image build with `pip install "webrouter[search,extract,research]>=0.12.0"`).
 State is in memory only.
+
+## Browser screens
+
+`/`, `/signup`, `/login`, `/contested`, `/dossiers/{domain}` (with `Accept: text/html`; otherwise JSON) and
+`/dossiers/{domain}/evidence` are served as self-contained HTML (inline CSS/JS, no external assets) and read the
+JSON API with the bearer token kept in `localStorage`. The dossier screen polls every second while `building`
+(latest read wins), keeps one Idempotency-Key per pending research/refresh so a lost response can be retried
+(`research-uncertain` / `refresh-uncertain`). Export/import keeps tokens, so signed-in browsers stay signed in.
