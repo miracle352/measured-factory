@@ -106,3 +106,5 @@ Interfaces:
 (A's W-4 is split into W-4a [R-04,R-05,R-06,R-18,R-19,R-47,R-48] and W-4b [R-02,R-42,R-51,R-52,R-53,R-27]. Examiner-added rows are appended below.)
 
 ## Examiner-added rows
+| R-72 | §3.4 clock `now` lacking an explicit offset (or not RFC 3339) -> 422 validation_failed, no change (examiner E-25) | B | P | W-6 | open |
+| R-73 | §10/§6 export contains no plaintext passwords; spent_units never decreases at any read (examiner E-115, E-120) | B | P | W-10 | open |
