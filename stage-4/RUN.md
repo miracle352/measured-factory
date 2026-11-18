@@ -24,3 +24,12 @@ all kept. Do not run with `--rm` if state must outlive the container.
 JSON API with the bearer token kept in `localStorage`. The dossier screen polls every second while `building`
 (latest read wins), keeps one Idempotency-Key per pending research/refresh so a lost response can be retried
 (`research-uncertain` / `refresh-uncertain`). Export/import keeps tokens, so signed-in browsers stay signed in.
+
+## Batches, budgets and restarts (stage 4)
+
+`POST /batches` / `GET /batches/{id}` keep batches in the same state file. Every build gets a budget object
+(`BuildBudget` in `store.py`): it reserves a call's maximum cost before the call (refusing when the build's
+80-unit cap or the batch's shared budget would be exceeded) and settles the billed units afterwards; each settle
+is persisted, so units billed before a stop are kept. A build running at a stop is restarted on boot with its
+spend so far, ends within 9 s (abort deadline), and a restarted build cut short by its budget ends `failed`
+leaving the fields as they were. Batch ids continue after restart and import.
