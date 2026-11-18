@@ -250,6 +250,17 @@ class Handler(BaseHTTPRequestHandler):
             limit = int_param(qs, "limit", 50, 1, 200)
             return 200, S.changes(since, limit)
 
+        if path == "/batches" and method == "POST":
+            uid = S.authenticate(self.headers.get("Authorization"))
+            key = self._idem_key()
+            body = parse_json(raw)
+            if not isinstance(body, dict):
+                raise malformed("body must be an object")
+            return S.post_batch(uid, key, path, body)
+        if path.startswith("/batches/") and method == "GET" and path.count("/") == 2:
+            uid = S.authenticate(self.headers.get("Authorization"))
+            return 200, S.get_batch(uid, unquote(path[len("/batches/"):]))
+
         segs = path.split("/")  # ['', 'dossiers', ...]
         if len(segs) < 2 or segs[0] != "" or segs[1] != "dossiers":
             raise notfound
