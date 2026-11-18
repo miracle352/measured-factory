@@ -11,3 +11,4 @@
 ## Stage 2
 - Stage-1 export holds only citations (no served text): imported candidates = one per stage-1 citation whose excerpt supports the field's value (kind/published_at null, provider = citation provider, retrieved_at = researched_at). Candidates with kind null rank as aggregator.
 - Stage 2: field `citations` lists every candidate with the selected value (no cap of 3); stage-1 "cite at most 3" ruling is superseded.
+- Stage 2: `Kind:` header value matches the listed values exactly (surrounding whitespace trimmed, case-sensitive); anything else, including `News`, takes the default rule. Same for `Published`: strict RFC 3339.
