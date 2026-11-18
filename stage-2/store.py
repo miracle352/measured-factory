@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
@@ -92,24 +93,102 @@ def verify_password(password, stored):
 
 
 def unknown_fields():
-    return {n: {"value": None, "status": "unknown", "citations": []} for n in FIELD_NAMES}
+    return {n: {"value": None, "status": "unknown", "citations": [], "candidates": []}
+            for n in FIELD_NAMES}
 
 
-def norm_fields(raw):
+_AUTH = {"own": 0, "filing": 0, "news": 1, "aggregator": 2, None: 2}
+_PROV = {"nimble": 0, "tavily": 1, "kernel": 2, "browserbase": 3}
+
+
+def _jkey(v):
+    return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
+
+def _norm_val(v):
+    return v.strip() if isinstance(v, str) else v
+
+
+def _fallback_assemble(cands):
+    """Used only when candidates.assemble_field is unavailable."""
+    cands = [dict(c) for c in cands]
+    for c in cands:
+        c["value"] = _norm_val(c["value"])
+
+    def pub(c):
+        p = c.get("published_at")
+        if not p:
+            return (1, 0.0)
+        try:
+            return (0, -parse_ts(p).timestamp())
+        except Exception:
+            return (1, 0.0)
+
+    def vkey(c):
+        v = c["value"]
+        return (0, v, "") if isinstance(v, int) and not isinstance(v, bool) else (1, 0, str(v))
+
+    cands.sort(key=lambda c: (_AUTH.get(c.get("kind"), 2), pub(c), c["url"],
+                              _PROV.get(c.get("provider"), 9), vkey(c)))
+    if not cands:
+        return {"value": None, "status": "unknown", "citations": [], "candidates": []}
+    sel = cands[0]["value"]
+    for i, c in enumerate(cands):
+        c["selected"] = i == 0
+    cites = [{"url": c["url"], "excerpt": c["excerpt"], "provider": c["provider"]}
+             for c in cands if _jkey(c["value"]) == _jkey(sel)]
+    status = "known" if all(_jkey(c["value"]) == _jkey(sel) for c in cands) else "contested"
+    return {"value": sel, "status": status, "citations": cites, "candidates": cands}
+
+
+def _assemble(cands):
+    try:
+        import candidates as C
+        return C.assemble_field(cands)
+    except ImportError:
+        return _fallback_assemble(cands)
+
+
+def _derive(name, fobj, researched_at):
+    try:
+        import candidates as C
+        return C.derive_import_candidates(name, fobj, researched_at)
+    except ImportError:
+        return [{"value": fobj["value"], "url": c["url"], "excerpt": c["excerpt"],
+                 "provider": c["provider"], "kind": None, "published_at": None,
+                 "retrieved_at": researched_at} for c in fobj["citations"]]
+
+
+def _clean_cite(c):
+    return {"url": str(c.get("url", "")), "excerpt": str(c.get("excerpt", "")),
+            "provider": str(c.get("provider", ""))}
+
+
+def norm_fields(raw, researched_at=None):
+    """Fields in stage-2 shape. A field carrying `candidates` is kept as given (build result or
+    stage-2 export). A stage-1 field (citations only) gets candidates derived from its citations."""
     out = {}
     raw = raw if isinstance(raw, dict) else {}
     for n in FIELD_NAMES:
         f = raw.get(n)
-        cites = []
-        if isinstance(f, dict) and f.get("value") is not None and isinstance(f.get("citations"), list):
-            for c in f["citations"]:
-                if isinstance(c, dict):
-                    cites.append({"url": str(c.get("url", "")), "excerpt": str(c.get("excerpt", "")),
-                                  "provider": str(c.get("provider", ""))})
-        if cites:
-            out[n] = {"value": f["value"], "status": "known", "citations": cites}
+        if not isinstance(f, dict):
+            out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
+        elif isinstance(f.get("candidates"), list):
+            cs = [dict(c) for c in f["candidates"] if isinstance(c, dict)]
+            if not cs:
+                out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
+            else:
+                out[n] = {"value": f.get("value"), "status": f.get("status") or "known",
+                          "citations": [_clean_cite(c) for c in (f.get("citations") or [])
+                                        if isinstance(c, dict)],
+                          "candidates": cs}
+        elif f.get("value") is not None and isinstance(f.get("citations"), list):
+            cites = [_clean_cite(c) for c in f["citations"] if isinstance(c, dict)]
+            fobj = {"value": f["value"], "status": "known", "citations": cites}
+            cands = _derive(n, fobj, researched_at) if cites else []
+            out[n] = _assemble(cands) if cands else dict(unknown_fields()[n])
         else:
-            out[n] = {"value": None, "status": "unknown", "citations": []}
+            out[n] = {"value": None, "status": "unknown", "citations": [], "candidates": []}
     return out
 
 
@@ -323,7 +402,7 @@ class Store:
                 spent = 0
             d["spent_units"] += max(spent, 0)
             if _res_get(res, "outcome") == "ready":
-                d["fields"] = norm_fields(_res_get(res, "fields"))
+                d["fields"] = norm_fields(_res_get(res, "fields"), now_iso)
                 d["researched_at"] = now_iso
                 d["last_outcome"] = "ready"
             else:
@@ -472,7 +551,7 @@ class Store:
             if not isinstance(d["fields"], dict):
                 raise invalid("bad fields")
             dossiers[domain] = {"id": d["id"], "domain": domain, "last_outcome": d["state"],
-                                "building": False, "fields": norm_fields(d["fields"]),
+                                "building": False, "fields": norm_fields(d["fields"], d["researched_at"]),
                                 "researched_at": d["researched_at"], "spent_units": spent}
         idem = {}
         for item in st["idem"]:
