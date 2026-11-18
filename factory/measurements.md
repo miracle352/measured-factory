@@ -14,3 +14,4 @@
 | D fast+research, no extract | 360 | 46 | 24 | 7.83 |
 
 - Choice: A. C is cheaper but misses fields only research reaches (spec counts research claims as evidence). Max single-build spend 47 (limit 80).
+- Stage 1 closing: review rounds 2 (API at b7b523f, support.py at eb22aeb, then full at d34251d); examiner rows added 2; failures caught in product code: 0 (examiner-side probe fixes only); outside-call cost: mock only, max 47 units/build; probes 1068 + 179 passed; examiner accepted d34251d (stage-1/ unchanged to final). Final isolated check r-s1-1: "claimed stage: 1".
