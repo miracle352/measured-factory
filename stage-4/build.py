@@ -540,7 +540,7 @@ class _Build:
             # pages cited by research that no search returned: fetch them so excerpts are checked against text
             if self.opt.extract_results and self.research_urls:
                 self._extract_all(pool, list(self.research_urls), limit=10)
-            if not self.domain_search_done and not self._stopped():
+            if not self.domain_search_done and self.successes > 0 and not self._stopped():
                 urls = self.domain_search() or []
                 if self.opt.extract_results:
                     self._extract_all(pool, urls)
