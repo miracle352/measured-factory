@@ -171,8 +171,7 @@ function renderInvestors(fo){
     if(fo.true_from)h+='<p class="small muted" style="margin:0 0 6px">In effect since '+DX.esc(DX.fmtDay(fo.true_from))+'</p>';
   }else h+='<div class="field-none">No investors found yet</div>';
   h+='<div class="row">'+DX.badge(st==="known"?"known":"unknown",st==="known"?"Known":"Unknown");
-  var no=(fo.origins||[]).length;
-  if(st==="known")h+=' <span class="small muted">'+(fo.corroborated?'Confirmed by independent sources':'Not yet confirmed by two independent sources')+(no?' ('+no+(no===1?' source':' sources')+')':'')+'</span>';
+    if(st==="known")h+=' <span class="small muted">'+(fo.corroborated?'Every investor is confirmed by two or more independent sources':'Some investors rest on a single independent source')+'</span>';
   h+='</div></div><div class="cites">';
   var cs=fo.citations||[];
   if(!cs.length)h+='<p class="muted small" style="margin:0">No sources for the investors yet.</p>';
