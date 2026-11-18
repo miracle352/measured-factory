@@ -403,9 +403,9 @@ _EXTRACTORS = {
     "legal_name": _x_legal_name,
     "hq_city": _x_hq_city,
     "ceo": _x_ceo,
-    "founded_year": lambda t, d: [],
-    "headcount_range": lambda t, d: [],
-    "funding_total": lambda t, d: [],
+    "founded_year": _x_founded,
+    "headcount_range": _x_headcount,
+    "funding_total": _x_funding,
 }
 
 
