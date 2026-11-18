@@ -29,3 +29,5 @@
 - Choice: rendered. Plain is cheaper on the mock but the spec's page text is browser text; plain text may differ from it on the hidden corpus. 429 weather gave identical results (24 refused calls each, no cost).
 - Deviations: builder-a W-2/W-4/W-5 code in d84c604 (marker commits d658edf, a403779); W-3/W-3b code in f88e425 (45bd83a marker). builder-b W-10..W-12 code in ui_pages.py commit; feb3484 only RUN.md.
 - Rows added by examiner: 11 (R-60..R-70).
+- Stage 2 closing: review rounds 2 (interim at feb3484 found 1 product-code failure: contested item missing field identifier; final at 73a7655); examiner rows added 11; failures caught in product code 1 (plus 1 low-risk note: Kind case, resolved by ruling); outside-call cost: mock only, max 72 units/build (limit 80); examiner probes 44 passed, 1 skipped (p08 browser-only page, no such page in the mock corpus); isolated check r-s2-x1: stage 1 122 passed, stage 2 12 passed, "claimed stage: 2". Uncovered: browser-only page text, kernel/browserbase sessions (unused), live providers, R-25 numbers not audited.
+- Time: dispatch and accept timestamps are in room-log; review rounds 2.
