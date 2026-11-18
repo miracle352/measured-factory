@@ -416,3 +416,109 @@ def test_u14_html_vs_json(world, build, corpus, base_url):
     assert j2.json()["domain"] == d
     # unauthenticated JSON is still 401; html route serves a page
     assert httpx.get(f"{base_url}/dossiers/{d}").status_code == 401
+
+
+def _contrast_report(page):
+    return page.evaluate("""() => {
+      const lum = c => { const [r,g,b] = c.map(v => { v/=255; return v<=0.03928? v/12.92 : Math.pow((v+0.055)/1.055,2.4)}); return 0.2126*r+0.7152*g+0.0722*b; };
+      const parse = s => { const m = s.match(/rgba?\(([^)]+)\)/); if(!m) return null; const p = m[1].split(',').map(Number); return {c:p.slice(0,3), a: p.length>3? p[3]:1}; };
+      const bgOf = el => { while (el) { const p = parse(getComputedStyle(el).backgroundColor); if (p && p.a > 0.5) return p.c; el = el.parentElement; } return [255,255,255]; };
+      const bad = [];
+      for (const el of document.querySelectorAll('main *, header *, nav *, label, button, a, input')) {
+        if (!el.childNodes.length || ![...el.childNodes].some(n => n.nodeType===3 && n.textContent.trim())) continue;
+        const cs = getComputedStyle(el); if (cs.visibility==='hidden' || el.offsetParent===null) continue;
+        const fg = parse(cs.color); if (!fg) continue;
+        const b = bgOf(el); const l1 = lum(fg.c), l2 = lum(b);
+        const ratio = (Math.max(l1,l2)+0.05)/(Math.min(l1,l2)+0.05);
+        const size = parseFloat(cs.fontSize); const bold = parseInt(cs.fontWeight) >= 700;
+        const need = (size >= 24 || (size >= 18.66 && bold)) ? 3 : 4.5;
+        if (ratio < need) bad.push([el.tagName, el.textContent.trim().slice(0,30), ratio.toFixed(2), need]);
+      }
+      return bad.slice(0, 8);
+    }""")
+
+
+def test_u15_labels_focus_contrast(world, build, corpus, sized):
+    """F-114,F-201,F-202: visible labels, apparent keyboard focus, AA contrast on every route."""
+    page = sized
+    n = page.size_name
+    cd, cf = contested_domain(corpus)
+    build(cd)
+    problems = []
+    for route, signed in [("/signup", False), ("/login", False), ("/", True), (f"/dossiers/{cd}", True),
+                          (f"/dossiers/{cd}/evidence", True), ("/contested", True)]:
+        if signed and tid(page, "current-user").count() == 0:
+            screens.sign_in(page)
+        page.goto(route)
+        page.wait_for_load_state("networkidle")
+        # labels: every visible text input has an associated label with visible text
+        unl = page.evaluate("""() => [...document.querySelectorAll('input:not([type=hidden]):not([type=submit]), textarea, select')]
+            .filter(i => i.offsetParent !== null)
+            .filter(i => { const l = i.labels && i.labels.length ? [...i.labels].map(x=>x.textContent.trim()).join('') : '';
+                           return !l; }).map(i => i.getAttribute('data-testid') || i.name)""")
+        if unl:
+            problems.append((route, "input without visible label", unl))
+        # focus: tab through up to 12 stops; focused element must show an outline/ring/shadow change
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        bad_focus = []
+        for _ in range(12):
+            page.keyboard.press("Tab")
+            info = page.evaluate("""() => { const e = document.activeElement; if (!e || e===document.body) return null;
+                const cs = getComputedStyle(e);
+                return {t: e.getAttribute('data-testid') || e.tagName,
+                  outline: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0,
+                  shadow: cs.boxShadow !== 'none', border: cs.borderColor + cs.borderWidth, bg: cs.backgroundColor}; }""")
+            if info and not (info["outline"] or info["shadow"]):
+                bad_focus.append(info["t"])
+        if bad_focus:
+            problems.append((route, "no focus ring", bad_focus[:5]))
+        c = _contrast_report(page)
+        if c:
+            problems.append((route, "contrast", c))
+        shot(page, f"a11y-{n}-" + route.strip("/").replace("/", "_").replace(".", "_")[:20] or "root")
+    assert not problems, problems
+
+
+def test_u16_lost_response_then_import_then_retry(world, corpus, web, base_url, page):
+    """F-186: a research response lost, state exported and imported, retry with same key shows
+    the dossier and leaves exactly one build."""
+    import httpx
+    d = domains(corpus)[0]
+    screens.sign_in(page)
+    page.goto("/")
+    keys = []
+    state = {"drop": True}
+
+    def handler(route):
+        req = route.request
+        if req.method == "POST" and req.url.rstrip("/").endswith("/dossiers"):
+            keys.append(req.headers.get("idempotency-key"))
+            if state["drop"]:
+                route.fetch()
+                state["drop"] = False
+                route.abort("connectionreset")
+                return
+        route.continue_()
+
+    page.route("**/dossiers", handler)
+    tid(page, "research-domain").fill(d)
+    tid(page, "research-submit").click()
+    expect(tid(page, "research-uncertain")).to_be_visible()
+    assert tid(page, "research-error").count() == 0
+    end = time.monotonic() + 40  # let the committed build finish so export holds a ready dossier
+    while time.monotonic() < end:
+        b = world.alice.get(f"/dossiers/{d}").json()
+        if b["state"] != "building":
+            break
+        time.sleep(0.3)
+    exp = httpx.get(f"{base_url}/_test/export", timeout=10)
+    assert exp.status_code == 200
+    assert httpx.post(f"{base_url}/_test/import", json=exp.json(), timeout=10).status_code == 204
+    before = dw.gatherings(web.log(), d)
+    tid(page, "research-submit").click()
+    page.wait_for_url(f"**/dossiers/{d}")
+    expect(tid(page, "dossier-domain")).to_have_text(d)
+    assert len(keys) == 2 and keys[0] == keys[1], keys
+    assert tid(page, "research-error").count() == 0 and tid(page, "research-uncertain").count() == 0
+    time.sleep(1.5)
+    assert dw.gatherings(web.log(), d) == before == 1

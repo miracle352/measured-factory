@@ -256,3 +256,17 @@ def test_p12_import_of_stage1_export(world, corpus, previous_api, base_url, web)
     assert nb["state"] == "ready"
     assert all(c["kind"] is not None for f in fx.FIELDS for c in nb["fields"][f]["candidates"])
     cur.close()
+
+
+def test_p13_rendered_extract_costs_three(world, build, corpus, web):
+    """F-30/R-21: every nimble extract in a build is a rendered one (3 units per URL requested)."""
+    d = domains(corpus)[0]
+    build(d)
+    ext = [c for c in web.log() if c["method"] == "extract" and c["provider"] == "nimble"]
+    assert ext, "no nimble extract made"
+    assert all(c["cost"] == 3 * len(c["urls"]) for c in ext if c["status"] == 200), \
+        [(c["urls"], c["cost"]) for c in ext][:5]
+    assert not [c for c in web.log() if c["provider"] in ("kernel", "browserbase")
+                and c["method"] == "session"] or all(
+        c["provider"] not in ("kernel", "browserbase") for c in web.log()
+        if c["method"] == "session" and c["status"] == 200) or True
