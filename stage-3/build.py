@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 import candidates as cand_mod
 import support
-from support import FIELDS
+from support import FIELDS, EXEC_TITLES
 
 MAX_UNITS = 80
 
@@ -63,6 +63,7 @@ class BuildResult:
     fields: dict | None                          # None when the build failed (keep the previous fields)
     spent_units: int
     log: list = dc_field(default_factory=list)   # (kind, detail, cost) per provider call, for measurement
+    pages: list = dc_field(default_factory=list)  # [{"url", "true_from"}] for every URL whose page text was read
 
 
 # --------------------------------------------------------------------------- router
@@ -103,6 +104,7 @@ class Evidence:
     provider: str
     kind: str
     published_at: str | None
+    true_from: str | None = None
 
 
 def _header_info(header: list[str]) -> dict[str, str]:
@@ -123,27 +125,33 @@ class Gathered:
         self.provider: dict[str, str] = {}
         self.evidence: list[Evidence] = []
         self._seen: set[tuple] = set()
+        self.pages: dict[str, str | None] = {}    # url -> true_from, for every page read
 
     def add_text(self, url: str, text: str, provider: str) -> None:
-        if not url or not text:
+        if not url or not isinstance(text, str):
             return
+        header, prose = support.split_header(text)
+        info = _header_info(header)
+        kind = cand_mod.page_kind(info.get("kind"), url, self.domain)
+        published = cand_mod.parse_published(info.get("published"))
+        true_from = cand_mod.page_true_from(info.get("effective"), published)
         with self.lock:
             if url in self.full:
                 return
             self.full[url] = text
             self.provider[url] = provider
-        header, prose = support.split_header(text)
-        info = _header_info(header)
-        kind = cand_mod.page_kind(info.get("kind"), url, self.domain)
-        published = cand_mod.parse_published(info.get("published"))
+            self.pages[url] = true_from
+        if not text:
+            return
         for sent in support.sentences(prose):
-            self._scan_sentence(url, sent, provider, kind, published)
+            self._scan_sentence(url, sent, provider, kind, published, true_from)
 
-    def _scan_sentence(self, url: str, sent: str, provider: str, kind: str, published: str | None) -> None:
+    def _scan_sentence(self, url: str, sent: str, provider: str, kind: str, published: str | None,
+                       true_from: str | None = None) -> None:
         sent = support.collapse_ws(sent)
         if not sent or len(sent) > 500:
             return
-        for f in FIELDS:
+        for f in FIELDS + EXEC_TITLES:
             vals = support.extract_values(f, sent, self.domain)
             if len(vals) == 1:
                 key = (f, url, sent, provider)
@@ -151,18 +159,32 @@ class Gathered:
                     if key in self._seen:
                         continue
                     self._seen.add(key)
-                    self.evidence.append(Evidence(f, vals[0], url, sent, provider, kind, published))
+                    self.evidence.append(Evidence(f, vals[0], url, sent, provider, kind, published, true_from))
 
     def decide(self, now_iso: str | None) -> dict:
         """Assemble every field from its candidates (candidates.assemble_field)."""
         out = {}
-        for f in FIELDS:
+        for f in FIELDS + ("executives",):
             with self.lock:
-                cands = [{"value": e.value, "url": e.url, "excerpt": e.excerpt, "provider": e.provider,
-                          "kind": e.kind, "published_at": e.published_at, "retrieved_at": now_iso}
-                         for e in self.evidence if e.field == f]
-            out[f] = cand_mod.assemble_field(cands)
+                cands = []
+                for e in self.evidence:
+                    if f == "executives":
+                        if e.field not in EXEC_TITLES:
+                            continue
+                    elif e.field != f:
+                        continue
+                    c = {"value": e.value, "url": e.url, "excerpt": e.excerpt, "provider": e.provider,
+                         "kind": e.kind, "published_at": e.published_at, "retrieved_at": now_iso,
+                         "true_from": e.true_from}
+                    if f == "executives":
+                        c["title"] = e.field
+                    cands.append(c)
+            out[f] = cand_mod.assemble_field(cands, f)
         return out
+
+    def page_list(self) -> list[dict]:
+        with self.lock:
+            return [{"url": u, "true_from": tf} for u, tf in self.pages.items()]
 
     def unknown_fields(self) -> list[str]:
         with self.lock:
@@ -455,7 +477,7 @@ class _Build:
         spent = self.spent
         if self.successes == 0 or self.should_abort():
             return BuildResult("failed", None, spent, self.log)
-        return BuildResult("ready", self.g.decide(self.now_iso), spent, self.log)
+        return BuildResult("ready", self.g.decide(self.now_iso), spent, self.log, self.g.page_list())
 
     def _extract_all(self, pool, urls: list[str], limit: int = 10) -> int:
         new = [u for u in dict.fromkeys(urls) if u not in self.g.full and u not in self.fetched][:limit]
