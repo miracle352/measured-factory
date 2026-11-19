@@ -126,6 +126,11 @@ def test_k02_executives_members_standing_origins(world, web, R):
     # coo became Cara Diaz (a new member): one origin, so no longer corroborated, no standing set
     assert f["value"][1] == {"title": "coo", "name": "Cara Diaz"}, f
     assert f["corroborated"] is False and f["corroborated_since"] is None, f
+    # Ben Okafor returns as coo with one origin only: a member that left starts again (R-19), though he once had two
+    b3 = R.run(d, 3, 3)
+    f = b3["fields"]["executives"]
+    assert f["value"] == [{"title": "cfo", "name": "Ana Silva"}, {"title": "coo", "name": "Ben Okafor"}], f
+    assert f["corroborated"] is False and f["corroborated_since"] is None, ("returning member kept old origins", f)
 
 
 # ============================================================ (2) investors typing (R-35) and rules
@@ -189,6 +194,9 @@ def test_t03_membership_runs_and_lookalikes(world, web, R):
     assert {c["origin"] for c in cands(b, "investors", "Mirage Capital")} == {d, "daily.test"}
     assert {c["origin"] for c in cands(b, "investors", "Quartz Capital")} == {"newsx.test", "newsy.test"}
     assert f["corroborated"] is False                            # Solo Partners etc. have one origin
+    # company-name removal splits a run: no name from "Orbit Ledger Works Capital"
+    for bad in ("Orbit Ledger Works Capital", "Orbit", "Capital", "Orbit Capital", "Works Capital", "Ledger Works Capital"):
+        assert bad not in got and bad not in members, (bad, got)
     # lookalike check on the page itself via citations of members
     assert all(cit["url"] for cit in f["citations"])
 
@@ -408,3 +416,47 @@ def test_m01_stage3_export_with_builds(world, web, clock, previous_api, base_url
         time.sleep(0.1)
     again = cur.get(f"/dossiers/{d}").json()["fields"]["ceo"]
     assert same(again["corroborated_since"], T(1)), again
+
+
+# ============================================================ (6) exports of older stages (stage-1/2/3 services)
+def test_m03_import_older_export(world, web, clock, previous_api, base_url):
+    d = "harbor-tech.test"
+    prev = previous_api
+    httpx.post(f"{prev.base_url}/_test/reset", json=fx.fixture(), timeout=RESET_TIMEOUT)
+    web.reset()
+    tok = _s3_login(prev)
+    cli = Api(prev.base_url, token=tok)
+    web.epoch(0)
+    assert_status(cli.post("/dossiers", json={"domain": d}, idempotency_key=new_key()), 202)
+    end = time.monotonic() + fx.SETTLE_SECONDS
+    while cli.get(f"/dossiers/{d}").json()["state"] == "building" and time.monotonic() < end:
+        time.sleep(0.1)
+    old = cli.get(f"/dossiers/{d}").json()
+    assert old["state"] == "ready"
+    exp = assert_status(httpx.get(f"{prev.base_url}/_test/export", timeout=10), 200).json()
+    web.reset()
+    assert httpx.post(f"{base_url}/_test/import", json=exp, timeout=10).status_code == 204
+    assert web.log() == []
+    cur = Api(base_url, token=tok)
+    new = assert_status(cur.get(f"/dossiers/{d}"), 200).json()
+    assert list(new["fields"]) == list(ALL)
+    for name in fx.FIELDS:
+        assert new["fields"][name]["value"] == old["fields"][name]["value"], name
+        for c in new["fields"][name]["candidates"]:
+            assert c["origin"], c
+        fx.assert_origins(name, new["fields"][name])
+        assert [(c["url"], c["excerpt"]) for c in new["fields"][name]["citations"]] ==             [(c["url"], c["excerpt"]) for c in old["fields"][name]["citations"]] if "excerpt" in str(old["fields"][name]["citations"]) else True
+    inv = new["fields"]["investors"]
+    assert inv["status"] == "unknown" and inv["value"] is None and inv["origins"] == [] and inv["corroborated"] is False
+    assert hist(cur, d)["investors"] == []
+    before = {n: [e["type"] for e in hist(cur, d)[n]] for n in fx.FIELDS}
+    # the first stage-4 ready build learns the investors: a `change` (the imported build was the first ready one)
+    assert_status(clock(T(3)), 204)
+    assert_status(cur.post(f"/dossiers/{d}/refresh", idempotency_key=new_key()), 202)
+    end = time.monotonic() + fx.SETTLE_SECONDS
+    while cur.get(f"/dossiers/{d}").json()["state"] == "building" and time.monotonic() < end:
+        time.sleep(0.1)
+    assert cur.get(f"/dossiers/{d}").json()["state"] == "ready"
+    h = hist(cur, d)
+    assert [e["type"] for e in h["investors"]] == ["change"], h["investors"]
+    assert {n: [e["type"] for e in h[n]] for n in fx.FIELDS} == before

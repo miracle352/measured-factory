@@ -43,7 +43,9 @@ page(F, "https://foundry-labs.test/team", "Foundry Labs CFO: Ana Silva.\nFoundry
      kind="own", epochs=(0, 1))
 page(F, "https://foundry-labs.test/team", "Foundry Labs CFO: Ana Silva.\nFoundry Labs COO: Cara Diaz.",
      kind="own", epochs=(2,))
-page(F, "https://newsc.test/foundry", "Foundry Labs CFO: Ana Silva.", epochs=(0, 1, 2))
+page(F, "https://foundry-labs.test/team", "Foundry Labs CFO: Ana Silva.\nFoundry Labs COO: Ben Okafor.",
+     kind="own", epochs=(3,))
+page(F, "https://newsc.test/foundry", "Foundry Labs CFO: Ana Silva.", epochs=(0, 1, 2, 3))
 page(F, "https://newsd.test/foundry", "Foundry Labs COO: Ben Okafor.", epochs=(1,))
 
 # ---- harbor-tech.test: investors over time (typing, extraction rules, /values) -----------------------------
@@ -80,6 +82,7 @@ page(L, "https://ledger-works-group.test/about",
      kind="own", registrant="parked.test")
 page(L, "https://daily.test/lw", "Ledger Works investors include Mirage Capital.")
 page(L, "https://daily3.test/lw", "Ledger Works investors include Lone Ventures.")
+page(L, "https://ledger-works.test/split", "Ledger Works investors include Orbit Ledger Works Capital.", kind="own")
 
 # ---- copy-desk.test: lineage, canonical chains, originals --------------------------------------------------
 C = company("copy-desk.test", "Copy Desk")
