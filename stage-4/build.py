@@ -303,6 +303,18 @@ def _is_refusal(exc: BaseException) -> bool:
     return False
 
 
+def _is_no_page(exc: BaseException) -> bool:
+    """True when an extract was answered 'no page at this URL' (status 404 or an in-band failure): the call is billed."""
+    cur: Any = exc
+    for _ in range(6):
+        if type(cur).__name__ == "ExtractFailure" or getattr(cur, "status_code", None) == 404:
+            return True
+        cur = getattr(cur, "original", None) or getattr(cur, "__cause__", None)
+        if cur is None:
+            break
+    return False
+
+
 class _Build:
     def __init__(self, domain: str, should_abort: Callable[[], bool], options: Options, now_iso: str | None = None,
                  budget=None):
@@ -420,6 +432,11 @@ class _Build:
                 result = fn()
             except Exception as exc:  # noqa: BLE001 - a provider failure never escapes the build
                 self._note_latency(began)
+                if kind == "extract" and _is_no_page(exc):
+                    # not refused: an extract answered with no page costs its units (section 9) and is not repeated
+                    self._settle(cost, cost)
+                    self.log.append((kind, detail + " [no page]", cost))
+                    return None
                 if _is_refusal(exc):
                     self._settle(cost, 0)
                     self.log.append((kind, detail + " [refused]", 0))
