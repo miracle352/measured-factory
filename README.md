@@ -41,7 +41,7 @@ never sees the builders' code, and measures cost before it chooses how to spend 
 At revision `4695fb1` the supplied checks for stages 1-4 all passed. The same build was
 broken: a crafted company with many canonical originals made one build bill **92 units
 against the 80-unit cap**, while the dossier reported 80. The examiner's spec-only probe
-`test_l01_origins_originals_and_hops` failed it (room 4, 18:05). builder-a found the cause
+`test_l01_origins_originals_and_hops` failed it (room 4, 17:05 UTC). builder-a found the cause
 (an extract answered with an in-band 404 is billed, but was treated as a free refusal and
 retried) and fixed it in `32129f9`. The examiner accepted at `3a05d10`.
 
@@ -117,15 +117,15 @@ Full write-up in [`FACTORY.md`](FACTORY.md). In short:
 
 ## The seven human messages
 
-| Time (Lagos) | Message | Why |
+| Time (UTC) | Message | Why |
 |---|---|---|
-| 18 Nov 01:10 | dispatch stage 1 | start |
-| 08:39 | dispatch stage 2 | start |
-| 12:03 | dispatch stage 3 | start |
-| 12:29 | "no seat has posted since 12:16" | a seat ended its turn while promising more work |
-| 13:02 | "no seat has posted since 12:32" | the same, plus a wait loop that matched its own command |
-| 17:05 | dispatch stage 4 | start; the stage-3 stalls became two rules in this dispatch |
-| 19 Nov 01:03 | resume | the Claude usage limit stopped every seat at 18:05 |
+| 18 Nov 00:10 | dispatch stage 1 | start |
+| 07:39 | dispatch stage 2 | start |
+| 11:03 | dispatch stage 3 | start |
+| 11:29 | nudge: no seat had posted for 13 minutes | a seat ended its turn while promising more work |
+| 12:02 | nudge: no seat had posted for 30 minutes | the same, plus a wait loop that matched its own command |
+| 16:05 | dispatch stage 4 | start; the stage-3 stalls became two rules in this dispatch |
+| 19 Nov 00:03 | resume | the Claude usage limit stopped every seat at 17:05 |
 
 The two rules added after stage 3: "Run every check in the foreground and wait for it to
 finish before ending your turn" and "Your turn ends when you send a message". Stage 4 had

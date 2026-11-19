@@ -140,9 +140,9 @@ on unseen pages.
   `pgrep` command and never finished. The stage-4 dispatch adds two rules: run every check
   in the foreground and wait for it, and your turn ends when you send a message. Stage 4
   had no stall from a seat.
-- **One Claude Pro account for four seats.** Stage 4 hit the 5-hour usage limit at 18:05,
+- **One Claude Pro account for four seats.** Stage 4 hit the 5-hour usage limit at 17:05 UTC,
   right after the examiner's CHANGES NEEDED verdict, and every seat stopped. One message
-  after the reset at 01:03 resumed it; the fix and acceptance took 11 more minutes.
+  after the reset at 00:03 UTC resumed it; the fix and acceptance took 11 more minutes.
 
 ## How the factory catches a bad result
 
