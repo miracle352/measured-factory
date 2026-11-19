@@ -39,3 +39,11 @@
 - Outside-call cost: no cost defined for stage 3; build path unchanged from stage 2 (mock, max 72 units/build, limit 80); no new measurement run.
 - Final: examiner accepted bb84cdd78beb38b9035485ccfe10bff5e1054b97. Isolated check final-iso: stage 1 122, stage 2 12, stage 3 9 passed; examiner probes 66/66 isolated (53 API, 4 UI, 9 supplied). Uncovered: stage-2 export builds-list schema is a guess (our stage-2 exports carry none); live contested/unknown executives states and loading/error states only via mocked screenshots; concurrency stress only builder-b's 3-dossier run and examiner's two-refresh probe.
 - Time: dispatch and accept timestamps are in the room log; interim rounds 2 plus final 1.
+
+## Stage 4
+- Rows added by examiner: 5 (R-61..R-65); ledger total 65.
+- Review rounds: 3 against builds (interim f27a809/89c06e4 found the restart overspend, fixed 00d4835; 4695fb1 found the 80-unit cap defect on originals, fixed 32129f9; final 3a05d10 accepted) plus a screens round (d7ff845).
+- Failures caught in product code: 3 (restart billed 204 vs batch budget 150; build billed 92 vs cap 80 because an in-band 404 extract, which is billed, was settled as free and retried; screens: self-contradicting corroboration line and raw field key visible on /contested).
+- Deviations: builder-b store.py 7e5b218 carries about 20 rows (R-13..16,19..21,33,36,43,44,46,52..59,61..63) in one commit (single intertwined file); builder-a dfbc5d8 also carries the originals-fetching loop and budget hook (R-06,08,09,10,44,46).
+- Outside-call cost: no new measurement run (mock, build cost cap 80 units/build, batch budget enforced; originals fetched via rendered extract at 3 units).
+- Final: examiner accepted 3a05d10 (stage-4 code = 32129f9). Isolated: own probes 50/50, supplied stages 1-4 all pass, rig 16/16 on crafted corpus. Uncovered: screen states other than stubbed known/unknown/contested investors (loading, error, fully corroborated, evidence page); restart probed with one batch.

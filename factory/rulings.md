@@ -21,3 +21,4 @@
 ## Stage 4
 - Investors typing: a name present only in the earlier value (removed) does not count as a correction, so any removal makes the entry `change` (spec defines the correction test for new names only; consistent with stage-3 disappearing = change).
 - Invalid Registrant line falls back to the own-URL host; invalid First-Published-By / Canonical lines are ignored.
+- An extract answered with no page (in-band 404 with HTTP 200) is billed at full cost (stage-1 section 9) and not retried; only 5xx/429 are free refusals.
